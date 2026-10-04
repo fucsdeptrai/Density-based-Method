@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Matplotlib / data outputs
+*.png
+!docs/**/*.png
+*.pdf
+!docs/**/*.pdf
+
+# Data
+*.csv
+!data/**/*.csv
+*.parquet
+*.npy
+*.npz
+*.pkl
+
+# Models
+*.joblib
+*.pkl
+*.h5
+*.pt
+*.pth
+*.onnx
+
+# Environment / secrets
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
