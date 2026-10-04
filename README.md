@@ -8,35 +8,63 @@
 notebooks/01_eda_overview.ipynb      EDA tổng quát (chất lượng dữ liệu, thời gian, không gian, k-distance)
 notebooks/02_preprocessing.ipynb     Chạy từng bước preprocessing, minh bạch số dòng vào/ra
 src/preprocess.py                    NGUỒN SỰ THẬT của preprocessing — cả 2 notebook đều import, không copy-paste
-scripts/download_data.sh             Tải dữ liệu thô (~750 MB)
-data/raw/                            Dữ liệu thô (gitignored)
+scripts/download_data.sh             Tải dữ liệu thô + ranh giới 5 quận (~750 MB)
+requirements.txt                     Cài đặt: pip install -r requirements.txt
+data/raw/                            Dữ liệu thô + nyc_boroughs.geojson (gitignored)
 data/processed/                      Dữ liệu đã xử lý, 1 file/kịch bản (gitignored)
 outputs/                             Ảnh + báo cáo QC (gitignored)
 ```
 
 ```bash
-bash scripts/download_data.sh        # 1. tải dữ liệu thô (~750 MB)
-python -m src.preprocess            # 2. xử lý cả 4 kịch bản (~70 giây)
+pip install -r requirements.txt     # 0. cài thư viện
+bash scripts/download_data.sh       # 1. tải dữ liệu thô + geojson (~750 MB)
+python -m src.preprocess           # 2. xử lý cả 4 kịch bản (~75 giây)
 python -m src.preprocess --scenario ca_diem_t7_manhattan   # hoặc từng ca
+python -m src.preprocess --no-ewr  # bỏ ngoại lệ sân bay Newark
 ```
 
 ### 4 kịch bản phân tích
 
-| Kịch bản | Khung giờ | Số điểm | Dùng để |
-|---|---|---|---|
-| `ca_diem_t7_manhattan` | Thứ 7, 17–19h | 78 066 | Ca điểm tối nhất — kịch bản chính |
-| `ca_diem_t7_toan_bo` | Thứ 7, 17–19h, toàn thành | 87 810 | So sánh phân bố mật độ giữa các quận |
-| `ca_sang_t2_manhattan` | Thứ 2, 8–10h | 43 781 | Ca sáng đi làm, đối chiếu với ca tối |
-| `dem_thu7_manhattan` | Thứ 7, 0–4h | 62 900 | Vùng hạ nghỉ (club, sân bay) |
+| Kịch bản | Khung giờ | Vùng | Số điểm | Dùng để |
+|---|---|---|---|---|
+| `ca_diem_t7_manhattan` | Thứ 7, 17–19h | Manhattan | 65 367 | Ca điểm tối nhất — kịch bản chính |
+| `ca_diem_t7_toan_bo` | Thứ 7, 17–19h | 5 quận | 85 997 | So sánh phân bố mật độ giữa các quận |
+| `ca_sang_t2_manhattan` | Thứ 2, 8–10h | Manhattan | 38 123 | Ca sáng đi làm, đối chiếu với ca tối |
+| `dem_thu7_manhattan` | Thứ 7, 0–4h | Manhattan | 49 752 | Vùng hạ nghỉ (club, sân bay) |
+
+### Quy tắc vùng hợp lệ
+
+**Hai khái niệm dễ nhầm — phân biệt rõ:**
+
+| Khái niệm | Ý nghĩa | Nơi dùng |
+|---|---|---|
+| `RegionMask.valid_region` | Vùng hợp lệ để **kiểm tra** điểm đón | `clean_coordinates` (lọc) |
+| `region` trong config | Vùng **phân tích** — nơi tìm hotspot | `filter_window` (cắt) |
+
+Vùng hợp lệ = **polygon hành chính 5 quận NYC** + **hộp 5 km quanh sân bay EWR** (Newark Liberty, 36 003 chuyến — nằm ở New Jersey nên không thuộc quận nào).
+
+Kịch bản `ca_diem_t7_toan_bo` dùng `region="nyc"` (đúng 5 borough, **không** gồm EWR) vì cần cùng một phạm vi cho cả 5 quận thì mới so sánh mật độ được. Dùng `region="valid"` nếu muốn đưa EWR vào.
+
+Đo trên toàn bộ 4.534.327 chuyến:
+
+| Quy tắc | Giữ lại | Ghi chú |
+|---|---|---|
+| bbox (cách cũ) | 4 502 415 | Hình chữ nhật, không có ý nghĩa hành chính |
+| 5 quận polygon | 4 411 894 | Loại sạch điểm ngoài khơi |
+| **polygon + EWR (đang dùng)** | **4 449 041** | +37 147 điểm sân bay Newark |
+
+Polygon 5 quận là tập con của bbox: không quận nào vượt biên. Điểm bị loại thêm gồm **45 772 điểm Jersey City/Hoboken** (bờ Hudson, cách Manhattan 2 km qua cầu) và khoảng 5 500 điểm ngoài khơi / bờ biển.
+
+> **Cần bàn trước khi nộp bài:** Jersey City/Hoboken là vùng đông dân làm việc thật. Loại là đúng nếu phạm vi nghiên cứu chỉ là NYC; nếu muốn vùng điều phố liên quận thì phải thêm hành lang NJ vào `RegionMask`.
 
 ### Kết quả preprocessing đã kiểm chứng
 
 | Bước | Kết quả |
 |---|---|
 | Đọc 6 file tháng 4–9/2014 | 4 534 327 chuyến |
-| Lọc toạ độ lỗi | loại 31 910 dòng (0.70%), **giữ lại 4 502 417** |
-| Cắt khung giờ × ngày × vùng | 43 781 – 87 810 điểm/kịch bản |
-| Chiếu sang toạ độ phẳng | azimuthal equidistant, sai số max **0.000118%** |
+| Lọc theo polygon 5 quận + EWR | loại 85 286 dòng (1.88%), **giữ lại 4 449 041** |
+| Cắt khung giờ × ngày × vùng | 38 123 – 85 997 điểm/kịch bản |
+| Chiếu sang toạ độ phẳng | azimuthal equidistant, sai số max **0.000134%** |
 
 Đo thử 3 phương án chiếu (20 000 cặp ngẫu nhiên, đo trong notebook):
 
@@ -77,10 +105,12 @@ Nguồn: [FiveThirtyEight — uber-tlc-foil-response](https://github.com/fivethi
 
 ## C. Preprocessing
 
-1. **Lọc toạ độ lỗi**: bỏ `0, 0`, giá trị `null`/trống, và ngoài biên giới hợp lệ của thành phố. → đo được 31 910 dòng (0.70%).
+1. **Lọc toạ độ lỗi**: bỏ `0, 0`, giá trị `null`/trống, và điểm nằm ngoài **polygon hành chính 5 quận + EWR**. Đo được 85 286 dòng (1.88%). Dùng polygon thay bbox vì bbox có hình chữ nhật không có ý nghĩa hành chính, giữ lại cả điểm ở giữa sông lẫn ngoài khơi.
 2. **Tính khoảng cách thật**: dùng **haversine** (đơn vị mét) thay cho Euclid trên độ — vì lon/lat không cùng thang đo. Để chạy DBSCAN, chiếu sang **hệ phẳng đơn vị mét** bằng *azimuthal equidistant* (sai số đo được < 0.0002%).
 3. **Cắt khung giờ**: giới hạn theo giờ cao điểm / theo ngày trong tuần, phục vụ đặt trạm theo ca.
 4. **Không z-score toạ độ**: chuẩn hoá toạ độ sẽ phá vỡ ranh giới không gian (khoảng cách và hướng trên bản đồ), nên giữ nguyên toạ độ thật và chuyển sang đơn vị mét khi tính eps.
+
+5. **Gắn nhãn quận**: mỗi điểm được gán tên quận (Manhattan/Brooklyn/Queens/Bronx/Staten Island/EWR) → phân tích hotspot theo quận không cần join lại dữ liệu.
 
 Toàn bộ xử lý nằm trong `src/preprocess.py`, có số dòng vào/ra từng bước và `assert` kiểm chứng. Chi tiết: `notebooks/02_preprocessing.ipynb`.
 

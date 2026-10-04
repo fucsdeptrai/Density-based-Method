@@ -7,8 +7,14 @@ BASE="https://raw.githubusercontent.com/fivethirtyeight/uber-tlc-foil-response/m
 DEST="${1:-data/raw}"
 mkdir -p "$DEST"
 
-echo "==> Tải taxi-zone-lookup.csv"
+echo "==> Tai taxi-zone-lookup.csv"
 curl -fsSL -o "$DEST/taxi-zone-lookup.csv" "$BASE/taxi-zone-lookup.csv"
+
+echo "==> Tai nyc_boroughs.geojson (ranh gioi hanh chinh 5 quan)"
+# Endpoint chinh thuc cua NYC Open Data tra 403, nen dung ban mirror nay.
+# 5 quan, 95 vong, 68.677 dinh — dung cho quy tac vung hop le.
+curl -fsSL -o "$DEST/nyc_boroughs.geojson" \
+  "https://raw.githubusercontent.com/dwillis/nyc-maps/master/boroughs.geojson"
 
 for m in apr14 may14 jun14 jul14 aug14 sep14; do
   echo "==> Tải uber-raw-data-$m.csv"

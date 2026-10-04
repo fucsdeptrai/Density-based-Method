@@ -23,15 +23,29 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import shapely
+from shapely.geometry import shape
+from shapely.ops import unary_union
 
 EARTH_R = 6_371_000.0
 
-# Bien gioi thanh pho New York (mot phan cua tong hop tren web).
-# Chon kiem tra theo bbox vi don gian va chan duoc nhieu truong hop
-# toa do rac, thay vi dung polygon nhac tai thu vien ngoai.
+# Bounding box thanh pho New York. CHI dung lam chi so QC va fallback khi
+# khong co file polygon — khong con la quy tac loai chinh.
+# (xem `RegionMask` va muc "Quy tac vung hop le")
 NYC_BBOX = (40.4774, -74.2591, 40.9176, -73.7004)  # lat_min, lon_min, lat_max, lon_max
 
-MANHATTAN_BBOX = (40.68, -74.05, 40.85, -73.90)
+# Ranh gioi hanh chinh 5 quan cua NYC. Day la quy tac loc chinh vi:
+#   - co y nghia hanh chinh -> bao cao hotspot theo quan duoc
+#   - loai sach diem ngoai khoi o ngoai bien (tu ~1.8 km den 190 km)
+# Do khac biet so voi bbox: loai them 90.521 diem, trong do 45.772 la
+# Jersey City/Hoboken (ben kia song Hudson) va 36.003 la EWR.
+BOROUGHS_FILE = "nyc_boroughs.geojson"
+
+# EWR (Newark Liberty) nam o New Jersey — khong thuoc 5 borough NYC nhung la
+# san bay don khach lon (36.003 chuyen). Hop nhat bang hop 5 km quanh san bay.
+# Do do o day dung HOP (bounding box) chu khong phai polygon vi khong co
+# polygon san bay san co trong du lieu.
+EWR_BOX = (-74.30, 40.64, -74.10, 40.75)  # lon_min, lat_min, lon_max, lat_max
 
 MONDAY, SATURDAY = 0, 5
 
@@ -58,7 +72,7 @@ class PreprocessConfig:
     name: str
     hours: tuple[int, int] = PEAK_HOURS  # [start, end) theo gio
     dow: tuple[int, ...] = (SATURDAY,)  # 0 = Thu Hai ... 6 = Chu Nhat
-    bbox: tuple[float, float, float, float] | None = NYC_BBOX
+    region: str | None = "manhattan"  # ten vung phan tich, xem REGIONS
     sample_n: int | None = None
     seed: int = 42
     raw_files: tuple[str, ...] | None = None  # None = tat ca file *14.csv
@@ -71,19 +85,32 @@ class PreprocessConfig:
 
 SCENARIOS: dict[str, PreprocessConfig] = {
     "ca_diem_t7_manhattan": PreprocessConfig(
-        name="ca_diem_t7_manhattan", hours=PEAK_HOURS, dow=(SATURDAY,), bbox=MANHATTAN_BBOX
+        name="ca_diem_t7_manhattan", hours=PEAK_HOURS, dow=(SATURDAY,), region="manhattan"
     ),
-    "ca_diem_t7_toan_bo": PreprocessConfig(name="ca_diem_t7_toan_bo", hours=PEAK_HOURS, dow=(SATURDAY,)),
+    "ca_diem_t7_toan_bo": PreprocessConfig(
+        name="ca_diem_t7_toan_bo", hours=PEAK_HOURS, dow=(SATURDAY,), region="nyc"
+    ),
     "ca_sang_t2_manhattan": PreprocessConfig(
-        name="ca_sang_t2_manhattan", hours=MORNING_HOURS, dow=(MONDAY,), bbox=MANHATTAN_BBOX
+        name="ca_sang_t2_manhattan", hours=MORNING_HOURS, dow=(MONDAY,), region="manhattan"
     ),
     "dem_thu7_manhattan": PreprocessConfig(
-        name="dem_thu7_manhattan", hours=NIGHT_HOURS, dow=(SATURDAY,), bbox=MANHATTAN_BBOX
+        name="dem_thu7_manhattan", hours=NIGHT_HOURS, dow=(SATURDAY,), region="manhattan"
     ),
 }
 
 RAW_COLUMNS = ["Date/Time", "Lat", "Lon", "Base"]
-OUT_COLUMNS = ["pickup_time", "lat", "lon", "base", "source", "x_m", "y_m", "hour", "dow"]
+OUT_COLUMNS = [
+    "pickup_time",
+    "lat",
+    "lon",
+    "base",
+    "source",
+    "x_m",
+    "y_m",
+    "hour",
+    "dow",
+    "borough",
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -124,37 +151,160 @@ def load_raw(data_dir: Path, files: tuple[str, ...] | None = None) -> pd.DataFra
 
 
 # --------------------------------------------------------------------------- #
-# 2. Loc toa do loi
+# 2. Vung hop le: polygon 5 borough + ngoai le EWR
 # --------------------------------------------------------------------------- #
-def coordinate_masks(df: pd.DataFrame, bbox: tuple[float, float, float, float]) -> dict[str, pd.Series]:
-    """Tra ve 3 mask loi toa do. Khong dung cho loc — chi de bao cao/hop nhat."""
+class RegionMask:
+    """Quy tac xac dinh diem don nam trong vung nghiep vu.
+
+    Vung hop le = 5 borough NYC (polygon hanh chinh) + hop 5 km quanh EWR.
+
+    Do do tren toan bo 4.534.327 diem cua du lieu:
+        bbox NYC thuan ......... giu 4.502.415
+        5 borough polygon ...... giu 4.411.894  (loai 90.521)
+        + hop EWR .............. giu 4.449.041  (them lai 37.147)
+
+    Polygon la tap con cua bbox: khong bo diem nao nam trong polygon ma
+    lai nam ngoai bbox. 90.521 diem bi loai gom 45.772 diem Jersey
+    City/Hoboken va ~21.000 diem rai rac tren bien. Xem README muc
+    "Quy tac vung hop le" truoc khi mo rong pham vi.
+    """
+
+    def __init__(self, data_dir: Path, include_ewr: bool = True):
+        self.data_dir = Path(data_dir)
+        self.include_ewr = include_ewr
+        self._cache: dict[str, shapely.geometry.base.BaseGeometry] = {}
+
+    def boroughs(self) -> dict[str, shapely.geometry.base.BaseGeometry]:
+        """Dict {ten quan: polygon}. Doc file geojson (2.9 MB, 95 vong)."""
+        if not self._cache:
+            import json
+
+            path = self.data_dir / BOROUGHS_FILE
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"Thieu {path}. Chay: bash scripts/download_data.sh"
+                )
+            geo = json.loads(path.read_text())
+            self._cache = {f["properties"]["BoroName"]: shape(f["geometry"]) for f in geo["features"]}
+        return self._cache
+
+    @property
+    def all_boroughs(self) -> shapely.geometry.base.BaseGeometry:
+        """Hop nhat 5 quan thanh mot polygon don le."""
+        if not hasattr(self, "_union"):
+            self._union = unary_union(list(self.boroughs().values()))
+        return self._union
+
+    @property
+    def valid_region(self) -> shapely.geometry.base.BaseGeometry:
+        """Vung hop le dung de KIEM TRA gia tri (diem co nam trong pham vi nghiep vu khong)."""
+        if not hasattr(self, "_valid"):
+            parts = [self.all_boroughs]
+            if self.include_ewr:
+                lon_min, lat_min, lon_max, lat_max = EWR_BOX
+                parts.append(shapely.geometry.box(lon_min, lat_min, lon_max, lat_max))
+            self._valid = unary_union(parts)
+        return self._valid
+
+    def inside(self, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+        """Mask vector hoa: True neu diem nam trong vung hop le."""
+        return shapely.contains_xy(self.valid_region, lon, lat)
+
+    def label(self, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+        """Ten quan cho tung diem; 'EWR' cho hop san bay, 'ngoai_vung' cho phan con lai.
+
+        Diem nam tren bien do (borrowed cap) co the khong khop quan nao —
+        gan 'ngoai_vung' thay vi ban None de moi do duong su dung duoc.
+        """
+        out = np.full(len(lat), "ngoai_vung", dtype=object)
+        for name, geom in self.boroughs().items():
+            out[shapely.contains_xy(geom, lon, lat)] = name
+        if self.include_ewr:
+            lon_min, lat_min, lon_max, lat_max = EWR_BOX
+            in_ewr = (
+                (lon > lon_min) & (lon < lon_max) & (lat > lat_min) & (lat < lat_max)
+            )
+            out[in_ewr] = "EWR"
+        return out
+
+
+# Vung dung cho PHAN TICH — khac voi `valid_region` (vung hop le de kiem tra).
+# "nyc" = 5 borough, KHONG gom EWR: kich ban nay dung de so sanh mat do giua
+# cac quan nen phai cung mot pham vi cho ca 5 quan.
+# Muon dua EWR vao kich ban, dung region="valid" (xem region_geometry).
+REGIONS = ("valid", "nyc", "manhattan", "bronx", "queens", "brooklyn", "staten_island")
+
+
+def region_geometry(name: str | None, mask: RegionMask) -> shapely.geometry.base.BaseGeometry | None:
+    """Polygon cua vung phan tich. None = khong gioi han them (van dung valid_region)."""
+    if name is None:
+        return None
+    if name == "valid":
+        return mask.valid_region
+    if name == "nyc":
+        return mask.all_boroughs
+    key = name.replace("_", " ").title()
+    geoms = mask.boroughs()
+    if key not in geoms:
+        raise KeyError(f"Vung '{name}' khong ton tai. Chon: {REGIONS} hoac None")
+    return geoms[key]
+
+
+def coordinate_masks(
+    df: pd.DataFrame,
+    bbox: tuple[float, float, float, float] = NYC_BBOX,
+    mask: RegionMask | None = None,
+) -> dict[str, pd.Series]:
+    """Tra ve cac mask loi toa do.
+
+    `ngoai_vung_bo_anh` la mask LOAI THAT SU (dunga polygon).
+    `ngoai_bien_gioi` chi la chi so QC, khong dung de loc — xem README.
+    """
     lat_min, lon_min, lat_max, lon_max = bbox
-    return {
-        "thieu_toa_do": df["lat"].isna() | df["lon"].isna(),
-        "toa_do_0_0": (df["lat"] == 0) & (df["lon"] == 0),
+    lat, lon = df["lat"], df["lon"]
+    out = {
+        "thieu_toa_do": lat.isna() | lon.isna(),
+        "toa_do_0_0": (lat == 0) & (lon == 0),
         "ngoai_bien_gioi": ~(
-            df["lat"].between(lat_min, lat_max) & df["lon"].between(lon_min, lon_max)
+            lat.between(lat_min, lat_max) & lon.between(lon_min, lon_max)
         ),
     }
+    if mask is not None:
+        # Diem thieu toa do se ra False o contains_xy -> gan True de chắc chắn bi loai
+        bad_null = out["thieu_toa_do"] | out["toa_do_0_0"]
+        inside = mask.inside(lat.fillna(0).to_numpy(), lon.fillna(0).to_numpy())
+        out["ngoai_vung_bo_anh"] = pd.Series(~inside, index=df.index) | bad_null
+    return out
 
 
 def clean_coordinates(
     df: pd.DataFrame,
-    bbox: tuple[float, float, float, float] = NYC_BBOX,
+    mask: RegionMask | None = None,
     report: dict | None = None,
 ) -> pd.DataFrame:
-    """Loai diem khong dung toa do: thieu, (0, 0), hoac ngoai bbox.
+    """Loai diem khong dung toa do: thieu, (0, 0), hoac ngoai vung hop le.
 
     Diem (0, 0) la vi tri GPS mac dinh khi loi -> nam o Guinea, khong phai NYC.
+    Neu `mask` la None thi fallback sang kiem tra theo bbox (chi so QC).
     """
-    masks = coordinate_masks(df, bbox)
-    bad = np.logical_or.reduce(list(masks.values()))
+    masks = coordinate_masks(df, NYC_BBOX, mask)
+    # Chi 3 mask nay loai that su; `ngoai_bien_gioi` chi de bao cao
+    reject_keys = ["thieu_toa_do", "toa_do_0_0"] + (
+        ["ngoai_vung_bo_anh"] if "ngoai_vung_bo_anh" in masks else ["ngoai_bien_gioi"]
+    )
+    bad = np.logical_or.reduce([masks[k].to_numpy() for k in reject_keys])
 
     if report is not None:
-        report["toi_buoc_loc_toa_do"] = {"vao": len(df), "ra": int((~bad).sum())}
-        for key, mask in masks.items():
-            report["toi_buoc_loc_toa_do"][key] = int(mask.sum())
-        report["toi_buoc_loc_toa_do"]["bi_loai_tong"] = int(bad.sum())
+        step = {"vao": len(df), "ra": int((~bad).sum())}
+        for key, m in masks.items():
+            step[key] = int(m.sum())
+        step["bi_loai_tong"] = int(bad.sum())
+        step["quy_tac"] = (
+            f"polygon_5_borough{'_va_EWR' if mask and mask.include_ewr else ''}"
+            if mask
+            else "bbox"
+        )
+        report["toi_buoc_loc_toa_do"] = step
 
     return df.loc[~bad].reset_index(drop=True)
 
@@ -253,19 +403,21 @@ def filter_window(
     df: pd.DataFrame,
     hours: tuple[int, int] = PEAK_HOURS,
     dow: tuple[int, ...] = (SATURDAY,),
-    bbox: tuple[float, float, float, float] | None = None,
+    region: shapely.geometry.base.BaseGeometry | None = None,
     report: dict | None = None,
 ) -> pd.DataFrame:
-    """Cat theo gio [start, end), ngay trong tuan va (neu co) bounding box."""
-    h0, h1 = hours
-    lat_min, lon_min, lat_max, lon_max = bbox if bbox else (-np.inf, -np.inf, np.inf, np.inf)
+    """Cat theo gio [start, end), ngay trong tuan va (neu co) vung phan tich.
 
-    mask = (
-        df["hour"].between(h0, h1 - 1)
-        & df["dow"].isin(dow)
-        & df["lat"].between(lat_min, lat_max)
-        & df["lon"].between(lon_min, lon_max)
-    )
+    `region` la polygon. Dung polygon thay vi bbox de ranh gioi bam dung
+    dia hinh — bbox cat cut diem don o mep vung (vd: cau Brooklyn, ven song).
+    """
+    h0, h1 = hours
+    mask = df["hour"].between(h0, h1 - 1) & df["dow"].isin(dow)
+
+    if region is not None:
+        lat, lon = df["lat"].to_numpy(), df["lon"].to_numpy()
+        mask &= pd.Series(shapely.contains_xy(region, lon, lat), index=df.index)
+
     out = df.loc[mask]
     if report is not None:
         report["cat_khung_gio_ngay_vung"] = {"vao": len(df), "ra": len(out)}
@@ -312,6 +464,7 @@ def prepare_raw(
     data_dir: Path,
     raw_files: tuple[str, ...] | None = None,
     verbose: bool = True,
+    region_mask: RegionMask | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Buoc dung chung cho moi kich ban: doc + loc toa do loi + them dac trung thoi gian.
 
@@ -321,10 +474,15 @@ def prepare_raw(
     raw = load_raw(data_dir, raw_files)
     report: dict = {"raw": {"dong": len(raw), "files": list(raw_files or ["*14.csv"])}}
 
+    mask = region_mask or RegionMask(data_dir)
     with_time = add_time_features(raw)
-    clean = clean_coordinates(with_time, NYC_BBOX, report)
+    clean = clean_coordinates(with_time, mask, report)
     if verbose:
-        print(f"  loc toa do: {report['toi_buoc_loc_toa_do']['vao']:,} -> {len(clean):,}")
+        step = report["toi_buoc_loc_toa_do"]
+        print(
+            f"  loc toa do ({step['quy_tac']}): {step['vao']:,} -> {len(clean):,}"
+            f"  (loai {step['ngoai_vung_bo_anh']:,} ngoai vung)"
+        )
     return clean, report
 
 
@@ -335,6 +493,7 @@ def build(
     verbose: bool = True,
     prepared: pd.DataFrame | None = None,
     shared_report: dict | None = None,
+    region_mask: RegionMask | None = None,
 ) -> BuildResult:
     """Chay chuoi xu ly cho mot ca. Tra ve diem + toa do phang (met).
 
@@ -349,14 +508,19 @@ def build(
     if verbose:
         print(f"\n=== {config.describe()} ===")
 
-    clean = prepare_raw(data_dir, config.raw_files, verbose=False)[0] if prepared is None else prepared
+    mask = region_mask or RegionMask(data_dir)
+    clean = (
+        prepare_raw(data_dir, config.raw_files, verbose=False)[0] if prepared is None else prepared
+    )
     rep.setdefault("raw", {"dong": len(clean)})
     rep.setdefault(
         "toi_buoc_loc_toa_do",
         {"vao": rep["raw"]["dong"], "ra": len(clean), "bi_loai_tong": rep["raw"]["dong"] - len(clean)},
     )
 
-    windowed = filter_window(clean, config.hours, config.dow, config.bbox, rep)
+    windowed = filter_window(
+        clean, config.hours, config.dow, region_geometry(config.region, mask), rep
+    )
     sampled = sample_points(windowed, config.sample_n, config.seed, rep)
 
     lat0, lon0 = float(clean["lat"].mean()), float(clean["lon"].mean())
@@ -373,20 +537,27 @@ def build(
         "n_cap_kiem_chung": err["n_pairs"],
     }
 
-    out = sampled.assign(x_m=coords[:, 0], y_m=coords[:, 1])[OUT_COLUMNS]
+    out = sampled.assign(x_m=coords[:, 0], y_m=coords[:, 1])
+    out["borough"] = mask.label(out["lat"].to_numpy(), out["lon"].to_numpy())
+    out = out[OUT_COLUMNS]
+
+    by_borough = out["borough"].value_counts().to_dict()
     rep["ket_qua"] = {
         "n_diem": len(out),
         "n_toa_do_lat_khac_nhau": int(np.unique(sampled["lat"]).size),
         "khoang_gio": list(config.hours),
         "ngay_trong_tuan": list(config.dow),
-        "bbox": list(config.bbox) if config.bbox else None,
+        "vung": config.region or "khong gioi han",
+        "theo_quan": {k: int(v) for k, v in by_borough.items()},
     }
 
     assert out["lat"].notna().all() and out["lon"].notna().all(), "con toa do thieu"
     assert len(out) > 0, "khong con diem sau khi loc"
+    assert "ngoai_vung" not in out["borough"].values, "con diem ngoai vung hop le"
 
     if verbose:
-        print(f"  -> {len(out):,} diem | phieu toi da {err['max_pct']:.6f}%")
+        top = ", ".join(f"{k}={v:,}" for k, v in list(by_borough.items())[:3])
+        print(f"  -> {len(out):,} diem ({config.region or 'khong gioi han'}) | {top}")
 
     return BuildResult(points=out, coords=coords, report=report)
 
@@ -395,15 +566,25 @@ def build_all(
     configs: list[PreprocessConfig],
     data_dir: Path,
     report: dict | None = None,
+    include_ewr: bool = True,
 ) -> list[BuildResult]:
     """Chay nhieu ca, chi doc du lieu tho mot lan."""
     raw_files = {c.raw_files for c in configs}
     if len(raw_files) > 1:
         raise ValueError("build_all chi ho tro cac ca cung bo du lieu tho")
 
-    prepared, shared = prepare_raw(data_dir, configs[0].raw_files)
+    region_mask = RegionMask(data_dir, include_ewr=include_ewr)
+    prepared, shared = prepare_raw(data_dir, configs[0].raw_files, region_mask=region_mask)
     results = [
-        build(c, data_dir, report=report, prepared=prepared, shared_report=shared) for c in configs
+        build(
+            c,
+            data_dir,
+            report=report,
+            prepared=prepared,
+            shared_report=shared,
+            region_mask=region_mask,
+        )
+        for c in configs
     ]
     return results
 
@@ -443,6 +624,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", default="data/processed")
     parser.add_argument("--report", default="outputs/preprocess_report.json")
     parser.add_argument("--sample-n", type=int, default=None, help="Gioi han so diem dau vao")
+    parser.add_argument(
+        "--no-ewr",
+        action="store_true",
+        help="Chi giu 5 borough NYC, loai ca san bay EWR o New Jersey",
+    )
     args = parser.parse_args(argv)
 
     names = [args.scenario] if args.scenario else sorted(SCENARIOS)
@@ -457,7 +643,10 @@ def main(argv: list[str] | None = None) -> int:
         configs.append(config)
 
     all_reports: dict = {}
-    for name, result in zip(names, build_all(configs, Path(args.data_dir), report=all_reports)):
+    results = build_all(
+        configs, Path(args.data_dir), report=all_reports, include_ewr=not args.no_ewr
+    )
+    for name, result in zip(names, results):
         all_reports[name]["scenario"] = name
         path = out_dir / f"{name}.csv"
         result.points.to_csv(path, index=False)
