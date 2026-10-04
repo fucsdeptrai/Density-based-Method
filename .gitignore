@@ -20,13 +20,17 @@ env/
 *.pdf
 !docs/**/*.pdf
 
-# Data
+# Data (raw ~700MB: tải lại bằng scripts/download_data.sh)
+data/
 *.csv
-!data/**/*.csv
 *.parquet
 *.npy
 *.npz
 *.pkl
+
+# Kết quả sinh ra khi chạy
+outputs/
+figures/
 
 # Models
 *.joblib

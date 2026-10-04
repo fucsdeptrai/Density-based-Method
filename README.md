@@ -9,16 +9,25 @@ Mục tiêu: **tìm các vùng có mật độ yêu cầu đón khách cao** đ�
 
 ## B. Data
 
-| Nguồn | Mô tả |
-|---|---|
-| NYC TLC Trip Record Data | Chuyến taxi, pickup datetime + pickup location (lat/long) |
-| Uber Pickup Data | Chuyến rideshare, pickup time + pickup location |
+Nguồn: [FiveThirtyEight — uber-tlc-foil-response](https://github.com/fivethirtyeight/uber-tlc-foil-response/tree/master/uber-trip-data)
+(Uber trips NYC, 4/2014 – 6/2015). Tải lại bằng `bash scripts/download_data.sh`.
 
-Trường dữ liệu dùng chung:
+| File | Số chuyến | Khoảng thời gian | Schema |
+|---|---|---|---|
+| `uber-raw-data-apr14.csv` | 564 516 | 04/2014 | `Date/Time, Lat, Lon, Base` |
+| `uber-raw-data-may14.csv` | 652 435 | 05/2014 | như trên |
+| `uber-raw-data-jun14.csv` | 663 844 | 06/2014 | như trên |
+| `uber-raw-data-jul14.csv` | 796 121 | 07/2014 | như trên |
+| `uber-raw-data-aug14.csv` | 829 275 | 08/2014 | như trên |
+| `uber-raw-data-sep14.csv` | 1 028 136 | 09/2014 | như trên |
+| `uber-raw-data-janjune-15.csv` | 14 270 479 | 01–06/2015 | `Dispatching_base_num, Pickup_date, Affiliated_base_num, locationID` |
+| `taxi-zone-lookup.csv` | 265 | — | `LocationID, Borough, Zone` |
 
-- `pickup_latitude`, `pickup_longitude` — toạ độ điểm đón
-- `pickup_datetime` — thời gian đón (lọc theo khung giờ)
-- (tùy chọn) `passenger_count`, `trip_distance` — phân tích theo nhóm khách
+**Lưu ý quan trọng về schema:**
+- 6 file `*-14.csv` có **lat/long trực tiếp** → dùng được cho DBSCAN ngay.
+- File `jan-june-15.csv` **không có lat/long**, chỉ có `locationID`. File `taxi-zone-lookup.csv` trong repo này **cũng không có cột lat/lon** → không map được sang toạ độ.
+  → Với file này chỉ dùng được phân tích **theo vùng (taxi zone)** (đếm số chuyến theo `locationID` / borough), hoặc phải join với bảng tra toạ độ khác.
+  → Vì vậy phần còn lại của bài dùng **6 file tháng 4–9/2014** làm dữ liệu chính cho hotspot.
 
 ## C. Preprocessing
 
