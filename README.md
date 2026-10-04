@@ -1,6 +1,52 @@
 # Ứng dụng 2: Xác định hotspot đón khách (Density-based Method)
 
-> **Trạng thái:** Draft — đang hoàn thiện nội dung và kết quả thực nghiệm.
+> **Trạng thái:** Đã có EDA + preprocessing chạy thật trên dữ liệu. Phần clustering (DBSCAN) đang viết.
+
+## Cấu trúc repo & cách chạy
+
+```
+notebooks/01_eda_overview.ipynb      EDA tổng quát (chất lượng dữ liệu, thời gian, không gian, k-distance)
+notebooks/02_preprocessing.ipynb     Chạy từng bước preprocessing, minh bạch số dòng vào/ra
+src/preprocess.py                    NGUỒN SỰ THẬT của preprocessing — cả 2 notebook đều import, không copy-paste
+scripts/download_data.sh             Tải dữ liệu thô (~750 MB)
+data/raw/                            Dữ liệu thô (gitignored)
+data/processed/                      Dữ liệu đã xử lý, 1 file/kịch bản (gitignored)
+outputs/                             Ảnh + báo cáo QC (gitignored)
+```
+
+```bash
+bash scripts/download_data.sh        # 1. tải dữ liệu thô (~750 MB)
+python -m src.preprocess            # 2. xử lý cả 4 kịch bản (~70 giây)
+python -m src.preprocess --scenario ca_diem_t7_manhattan   # hoặc từng ca
+```
+
+### 4 kịch bản phân tích
+
+| Kịch bản | Khung giờ | Số điểm | Dùng để |
+|---|---|---|---|
+| `ca_diem_t7_manhattan` | Thứ 7, 17–19h | 78 066 | Ca điểm tối nhất — kịch bản chính |
+| `ca_diem_t7_toan_bo` | Thứ 7, 17–19h, toàn thành | 87 810 | So sánh phân bố mật độ giữa các quận |
+| `ca_sang_t2_manhattan` | Thứ 2, 8–10h | 43 781 | Ca sáng đi làm, đối chiếu với ca tối |
+| `dem_thu7_manhattan` | Thứ 7, 0–4h | 62 900 | Vùng hạ nghỉ (club, sân bay) |
+
+### Kết quả preprocessing đã kiểm chứng
+
+| Bước | Kết quả |
+|---|---|
+| Đọc 6 file tháng 4–9/2014 | 4 534 327 chuyến |
+| Lọc toạ độ lỗi | loại 31 910 dòng (0.70%), **giữ lại 4 502 417** |
+| Cắt khung giờ × ngày × vùng | 43 781 – 87 810 điểm/kịch bản |
+| Chiếu sang toạ độ phẳng | azimuthal equidistant, sai số max **0.000118%** |
+
+Đo thử 3 phương án chiếu (20 000 cặp ngẫu nhiên, đo trong notebook):
+
+| Phương án | Sai số trung bình | Sai số max |
+|---|---|---|
+| equirectangular `cos(lat0)` | 0.013% | 0.178% |
+| equirectangular `cos(lat)` | 0.009% | 0.160% |
+| **azimuthal equidistant** | **0.000002%** | **0.00015%** |
+
+→ Chỉ phương án cuối cho phép đọc `eps` là **mét thật** mà không phải hiệu chỉnh tay. Chi tiết ở `notebooks/02_preprocessing.ipynb`.
 
 ## A. Problem
 
@@ -31,10 +77,12 @@ Nguồn: [FiveThirtyEight — uber-tlc-foil-response](https://github.com/fivethi
 
 ## C. Preprocessing
 
-1. **Lọc toạ độ lỗi**: bỏ `0, 0`, giá trị `null`/trống, và ngoài biên giới hợp lệ của thành phố.
-2. **Tính khoảng cách thật**: dùng **haversine** (đơn vị mét) thay cho Euclid trên độ — vì lon/lat không cùng thang đo.
+1. **Lọc toạ độ lỗi**: bỏ `0, 0`, giá trị `null`/trống, và ngoài biên giới hợp lệ của thành phố. → đo được 31 910 dòng (0.70%).
+2. **Tính khoảng cách thật**: dùng **haversine** (đơn vị mét) thay cho Euclid trên độ — vì lon/lat không cùng thang đo. Để chạy DBSCAN, chiếu sang **hệ phẳng đơn vị mét** bằng *azimuthal equidistant* (sai số đo được < 0.0002%).
 3. **Cắt khung giờ**: giới hạn theo giờ cao điểm / theo ngày trong tuần, phục vụ đặt trạm theo ca.
 4. **Không z-score toạ độ**: chuẩn hoá toạ độ sẽ phá vỡ ranh giới không gian (khoảng cách và hướng trên bản đồ), nên giữ nguyên toạ độ thật và chuyển sang đơn vị mét khi tính eps.
+
+Toàn bộ xử lý nằm trong `src/preprocess.py`, có số dòng vào/ra từng bước và `assert` kiểm chứng. Chi tiết: `notebooks/02_preprocessing.ipynb`.
 
 ## D. Các phương pháp được xem xét
 
