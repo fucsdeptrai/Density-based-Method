@@ -224,6 +224,7 @@ src/hotspot/
   └── map_layers.py         chuyen ket qua thanh lop folium
 tests/                      58 test cho filters / dbscan / summaries / figures
 notebooks/03_baseline_dbscan.ipynb   quet eps x MinPts, chon tham so mac dinh
+notebooks/04_tim_khung_gio_va_eps.ipynb  tai sao DBSCAN khong tach duoc, va sua the nao
 scripts/make_figures.py     sinh anh tinh + GIF cho slide (offline, khong can mang)
 scripts/capture_screenshots.py       chup fallback (dung Chrome san co)
 outputs/figures/            5 hinh + 1 GIF + bang CSV de dan vao slide
@@ -274,19 +275,41 @@ Lưu ý kỹ thuật: polygon phải được chiếu sang **cùng hệ toạ đ
 
 ## Giới hạn đã biết
 
-**Cụm lớn nhất chiếm 84–88% dữ liệu ở mọi giá trị tham số đã thử** (50–300 m). Không phải lỗi cấu hình: Manhattan có mật độ điểm đón cao liên tục nên ở bán kính vài trăm mét các điểm nối thành một mạng liên thông.
+### Vấn đề chính: mật độ dữ liệu, không phải tham số
 
-- Với câu hỏi *"khu nào đông?"* → kết quả đúng: 1 cụm lớn = Manhattan.
-- Với câu hỏi *"đứng ở đâu?"* → phải giảm `eps` xuống vài chục mét. **Chưa làm trong phạm vi này.**
+DBSCAN trả về **một cụm khổng lồ chiếm 77–82% dữ liệu** ở cấu hình mặc định. Nguyên nhân **không phải** khung giờ hay giá trị `eps`:
 
-Nói "DBSCAN tìm được 131 hotspot" mà không kèm cụm lớn nhất chiếm 87% là con số sai.
+| Số điểm vào DBSCAN | Cụm lớn nhất | Đạt yêu cầu |
+|---|---|---|
+| 10.000 | 10,7% | ✓ |
+| 20.000 | 22,8% | ✓ |
+| 30.000 | 38,1% | ✓ |
+| 60.000 | 72,0% | ✗ |
+| 200.000 | 80,7% | ✗ |
 
-Ngoài ra:
+Ở 200.000 điểm, **mọi** `eps` từ 50 đến 150 m đều cho cụm lớn nhất 77–82%. Vùng khả thi nằm dưới ~40.000 điểm trên phạm vi 5 quận.
 
-- App lấy mẫu 200 000 điểm nên số cụm có thể lệch vài so với chạy đủ 472 170 điểm.
-- Diện tích `area_km2` tính bằng **bao lồi** chỉ để tính mật độ so sánh — không phải ranh giới cụm.
+Phạm vi không gian cũng quyết định mạnh — cùng ca, cùng 200k điểm:
+
+| Quận | Số điểm | `top_share` ở eps 60/80/100 |
+|---|---|---|
+| Manhattan | 165.707 | 95,9% / 98,1% / 98,4% |
+| Brooklyn | 18.943 | 8,9% / 18,0% / 27,1% |
+| Queens | 13.087 | 16,5% / 16,9% / 17,0% |
+
+**Cách sửa, theo thứ tự ưu tiên:** giảm về 20–30k điểm → thu hẹp phạm vi (bỏ Manhattan) → đặt `eps` trong khoảng **60–80 m**.
+
+Chi tiết và số liệu: `notebooks/04_tim_khung_gio_va_eps.ipynb`.
+
+### Vì sao `eps = 100 m` là sai
+
+Trên mẫu 20.000 điểm của ca điểm, `top_share` nhảy từ 37% (80 m) lên 60% (90 m). `eps = 100 m` nằm **trên** vực thẳm, ở phía Manhattan bị gộp. Giá trị dùng được là 60–80 m.
+
+### Những điều khác
+
 - Kết quả là **hotspot lịch sử** 4/2014–9/2014. Không phải dự báo nhu cầu, không phải khuyến nghị vị trí cho tài xế.
-- Chưa so sánh định lượng với K-Means.
+- Diện tích `area_km2` tính bằng **bao lồi** chỉ để tính mật độ so sánh — không phải ranh giới cụm.
+- Chưa so sánh định lượng với K-Means. Chưa thử HDBSCAN (thích ứng mật độ cục bộ) — có thể giải quyết đúng vấn đề này mà không cần bớt dữ liệu.
 
 ## Kịch bản demo 10 phút
 
