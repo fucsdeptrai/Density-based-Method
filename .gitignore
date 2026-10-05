@@ -18,6 +18,9 @@ env/
 *.png
 !docs/**/*.png
 !outputs/screenshots/**/*.png
+!outputs/figures/**/*.png
+*.gif
+!outputs/figures/**/*.gif
 *.pdf
 !docs/**/*.pdf
 
@@ -30,10 +33,12 @@ data/
 *.pkl
 
 # Kết quả sinh ra khi chạy.
-# GIU outputs/screenshots/ — anh chup fallback cho buoi thuyet trinh,
-# README tro toi nen phai commit.
+# GIU outputs/screenshots/ va outputs/figures/ — anh chup fallback va anh
+# dan vao slide, README tro toi nen phai commit.
+# (tong ~2 MB, sinh lai bang scripts/make_figures.py)
 outputs/*
 !outputs/screenshots/
+!outputs/figures/
 figures/
 
 # Models

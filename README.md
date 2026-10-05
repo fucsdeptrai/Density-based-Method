@@ -222,13 +222,34 @@ src/hotspot/
   ├── kde.py                KernelDensity + luoi uoc luong
   ├── summaries.py          bang xep rank cum + chi so cap trang
   └── map_layers.py         chuyen ket qua thanh lop folium
-tests/                      42 test cho filters / dbscan / summaries
+tests/                      58 test cho filters / dbscan / summaries / figures
 notebooks/03_baseline_dbscan.ipynb   quet eps x MinPts, chon tham so mac dinh
+scripts/make_figures.py     sinh anh tinh + GIF cho slide (offline, khong can mang)
 scripts/capture_screenshots.py       chup fallback (dung Chrome san co)
-outputs/screenshots/                3 kich ban da chup
+outputs/figures/            5 hinh + 1 GIF + bang CSV de dan vao slide
+outputs/screenshots/        3 kich ban da chup tu app
 ```
 
 Logic phân cụm nằm trong `src/hotspot/` nên chạy được từ notebook, script hay pytest — không phụ thuộc Streamlit.
+
+## Hình ảnh cho bài trình bày
+
+```bash
+python scripts/make_figures.py     # ~45 giây, xuất vào outputs/figures/
+```
+
+| File | Dùng để |
+|---|---|
+| `fig1_eps_sweep.png` | **Ảnh chính.** 8 panel, eps 30 → 300 m: 796 cụm → 38 cụm, nhiễu 45% → 3% |
+| `fig2_eps_sweep.gif` | Animation cùng câu chuyện: cụm tách nhỏ rồi dính lại |
+| `fig3_hotspot_ca_diem.png` | Bản đồ lớn ca điểm, có nhãn top 3 cụm + số chuyến thật |
+| `fig4_tradeoff.png` | 3 biểu đồ: số cụm / tỉ lệ nhiễu / cụm lớn nhất chiếm % dữ liệu |
+| `fig5_borough.png` | Phân bố chuyến đón theo quận |
+| `bang_hotspot.csv` | Bảng xếp hạng cụm để dán vào slide |
+
+Nền bản đồ là polygon 5 quận từ `nyc_boroughs.geojson`, vẽ bằng matplotlib — **không cần mạng, không cần API key**, nên sinh được trong phòng thi. Nếu cần đường phố thật thì xem bản folium trong app hoặc `outputs/baseline_*.html`.
+
+Lưu ý kỹ thuật: polygon phải được chiếu sang **cùng hệ toạ độ mét** với dữ liệu. `figures.py` lấy `lat0`/`lon0` từ `outputs/preprocess_report.json` và có test khoá lại điều này — nếu vẽ polygon ở toạ độ độ cạnh dữ liệu mét, nền sẽ nằm ngoài khung hình và biến mất.
 
 ## Tham số mặc định và căn cứ
 
@@ -280,7 +301,10 @@ Ngoài ra:
 ## Test
 
 ```bash
-python -m pytest        # 42 test
+python -m pytest        # 58 test
 ```
 
-Trong đó có `test_eps_is_metres_not_degrees` — dựng hai cụm cách nhau 500 m, kiểm chứng `eps=100` tách và `eps=600` gộp. Nếu `eps` bị đọc nhầm là độ thì cả hai nhánh đều cho kết quả giống nhau và test bắt được lỗi đó.
+Hai test đáng chú ý:
+
+- `test_eps_is_metres_not_degrees` — dựng hai cụm cách nhau 500 m, kiểm chứng `eps=100` tách và `eps=600` gộp. Nếu `eps` bị đọc nhầm là độ thì cả hai nhánh cho kết quả giống nhau và test bắt được lỗi đó.
+- `test_rings_must_share_coordinate_system_with_data` — khoá lại lỗi đã mắc: vẽ polygon ở toạ độ độ cạnh dữ liệu vẽ ở mét, khiến nền bản đồ nằm ngoài khung hình.

@@ -104,22 +104,27 @@ def run_dbscan(
     return result
 
 
+CENTROID_COLUMNS = {
+    "cluster_id": "int64",
+    "centroid_x_m": "float64",
+    "centroid_y_m": "float64",
+    "centroid_latitude": "float64",
+    "centroid_longitude": "float64",
+    "pickup_count": "int64",
+}
+
+
 def compute_centroids(df: pd.DataFrame, result: DBSCANResult) -> pd.DataFrame:
     """Trung tam hinh hoc cua tung cum (khong tinh ca noise).
 
     Tinh theo toa do phang roi chuyen lai lat/lon de ve len ban do.
+
+    Khi khong co cum nao, tra DataFrame rong NEN KHAI BAO KIEU DU LIEU. Neu
+    de kieu mac dinh (object), moi ham ben ngoai nhu `.nlargest()` se nem
+    TypeError khi goi tren bang rong.
     """
     if result.n_clusters == 0:
-        return pd.DataFrame(
-            columns=[
-                "cluster_id",
-                "centroid_x_m",
-                "centroid_y_m",
-                "centroid_latitude",
-                "centroid_longitude",
-                "pickup_count",
-            ]
-        )
+        return pd.DataFrame({c: pd.Series(dtype=t) for c, t in CENTROID_COLUMNS.items()})
 
     frame = df.iloc[: len(result.labels)].copy()
     frame["_label"] = result.labels

@@ -4,6 +4,8 @@
 # --- Xu ly du lieu ---
 pandas==3.0.5
 numpy==2.4.6
+# bat buoc: app doc data/processed/full.parquet bang pandas.read_parquet
+pyarrow>=15.0
 
 # --- Do hoa ---
 matplotlib==3.11.1
@@ -22,7 +24,7 @@ streamlit-folium>=0.2.0
 folium>=0.17
 branca>=0.8
 
-# --- Test ---
+# --- Test + ve hinh ---
 pytest>=8.0
 
 # --- Chup man hinh fallback (tuy chon) ---
