@@ -19,6 +19,7 @@ env/
 !docs/**/*.png
 !outputs/screenshots/**/*.png
 !outputs/figures/**/*.png
+!outputs/zoom/**/*.png
 *.gif
 !outputs/figures/**/*.gif
 *.pdf
@@ -33,12 +34,15 @@ data/
 *.pkl
 
 # Kết quả sinh ra khi chạy.
-# GIU outputs/screenshots/ va outputs/figures/ — anh chup fallback va anh
-# dan vao slide, README tro toi nen phai commit.
-# (tong ~2 MB, sinh lai bang scripts/make_figures.py)
+# GIU outputs/screenshots/ va outputs/figures/*.png — anh chup fallback và
+# ảnh dán vào slide, README trỏ tới nên phải commit.
+# KHONG commit outputs/zoom/*.html (~26 MB, sinh lại bằng
+# scripts/make_zoom_figures.py)
 outputs/*
 !outputs/screenshots/
 !outputs/figures/
+!outputs/zoom/
+outputs/zoom/*
 figures/
 
 # Models

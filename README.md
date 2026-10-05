@@ -250,6 +250,24 @@ python scripts/make_figures.py     # ~45 giây, xuất vào outputs/figures/
 
 Nền bản đồ là polygon 5 quận từ `nyc_boroughs.geojson`, vẽ bằng matplotlib — **không cần mạng, không cần API key**, nên sinh được trong phòng thi. Nếu cần đường phố thật thì xem bản folium trong app hoặc `outputs/baseline_*.html`.
 
+### Ảnh zoom cụ thể — cấu hình chạy được
+
+```bash
+python scripts/make_zoom_figures.py
+```
+
+Biểu đồ tổng hợp chỉ nói "có bao nhiêu cụm". Nhóm ảnh này cho thấy **cụm nằm ở đâu** và có tách được không, ở đúng cấu hình khuyến nghị (`eps=70 m`, dưới 30k điểm, bỏ Manhattan):
+
+| File | Dùng để |
+|---|---|
+| `z2_mat_do.png` | **Ảnh chứng minh nguyên nhân.** Cùng khu vực Brooklyn, cùng `eps=70m`, chỉ khác số điểm: 10k → 30k → 44k. Thấy các cụm nhỏ (nhiều màu) bị hút dần vào 2 khối lớn |
+| `z1_brooklyn_cum.png` | Brooklyn ở cấu hình tốt: 167 cụm, 6 cụm ≥1%, có nhãn tọa độ từng cụm |
+| `z5_tiem_dung.png` | **Zoom 840 m.** Từng chấm là một chuyến đón thật — thấy rõ chúng xếp thành hàng dọc theo đường phố. Đây là ảnh chứng minh DBSCAN bám đúng hình dạng thật |
+| `z3_manhattan_zoom.png` | Manhattan thu 30k điểm — vẫn là một khối 85%, dù đã giảm mạnh |
+| `z4_queens_cum.png` | Queens, 11 cụm ≥1% |
+
+Script cũng sinh 3 bản đồ folium có **đường phố thật** trong `outputs/zoom/ban_do_*.html` (~26 MB, không commit vì quá nặng — sinh lại bằng lệnh trên).
+
 Lưu ý kỹ thuật: polygon phải được chiếu sang **cùng hệ toạ độ mét** với dữ liệu. `figures.py` lấy `lat0`/`lon0` từ `outputs/preprocess_report.json` và có test khoá lại điều này — nếu vẽ polygon ở toạ độ độ cạnh dữ liệu mét, nền sẽ nằm ngoài khung hình và biến mất.
 
 ## Tham số mặc định và căn cứ
