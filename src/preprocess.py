@@ -589,6 +589,37 @@ def build_all(
     return results
 
 
+def build_full(
+    data_dir: Path,
+    sample_n: int | None = None,
+    seed: int = 42,
+    include_ewr: bool = True,
+    verbose: bool = True,
+) -> BuildResult:
+    """Xuat dataset DAY DU (moi ngay, moi gio) cho app chon tu do thoi gian.
+
+    4 kich ban trong `SCENARIOS` deu da cat theo ca nen app khong the tu doi
+    ngay/gio. Dataset nay giu toan bo diem hop le (~4.45M) de app loc tiep.
+    """
+    region_mask = RegionMask(data_dir, include_ewr=include_ewr)
+    clean, report = prepare_raw(data_dir, verbose=verbose, region_mask=region_mask)
+
+    sampled = sample_points(clean, sample_n, seed, report)
+    lat0, lon0 = float(clean["lat"].mean()), float(clean["lon"].mean())
+    coords = to_metric(sampled["lat"].to_numpy(), sampled["lon"].to_numpy(), lat0, lon0)
+
+    out = sampled.assign(x_m=coords[:, 0], y_m=coords[:, 1])
+    out["borough"] = region_mask.label(out["lat"].to_numpy(), out["lon"].to_numpy())
+
+    report["projection"] = {"lat0": lat0, "lon0": lon0}
+    report["ket_qua"] = {"n_diem": len(out), "vung": "full (khong cat gio)"}
+
+    assert len(out) > 0, "khong con diem sau khi loc"
+    if verbose:
+        print(f"  full dataset: {len(out):,} diem")
+    return BuildResult(points=out, coords=coords, report=report)
+
+
 # --------------------------------------------------------------------------- #
 # 7. CLI
 # --------------------------------------------------------------------------- #
@@ -629,11 +660,34 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Chi giu 5 borough NYC, loai ca san bay EWR o New Jersey",
     )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Xuat them dataset DAY DU (moi ngay, moi gio) ra file.parquet cho app",
+    )
     args = parser.parse_args(argv)
 
-    names = [args.scenario] if args.scenario else sorted(SCENARIOS)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    all_reports: dict = {}
+
+    if args.full:
+        # Dataset day dung cho app: app tu chon ngay/gio nen can tat ca diem
+        print("\n=== Xuat dataset day du (cho app) ===")
+        full = build_full(
+            Path(args.data_dir),
+            sample_n=args.sample_n,
+            include_ewr=not args.no_ewr,
+        )
+        all_reports["full"] = {"scenario": "full", **full.report}
+        full_path = out_dir / "full.parquet"
+        full.points.to_parquet(full_path, index=False)
+        print(f"  -> luu {full_path} ({full_path.stat().st_size / 1e6:.1f} MB)")
+
+    if args.scenario is None and not args.full:
+        names = sorted(SCENARIOS)
+    else:
+        names = [args.scenario] if args.scenario else []
 
     configs = []
     for name in names:
@@ -642,15 +696,15 @@ def main(argv: list[str] | None = None) -> int:
             config = PreprocessConfig(**{**asdict(config), "sample_n": args.sample_n})
         configs.append(config)
 
-    all_reports: dict = {}
-    results = build_all(
-        configs, Path(args.data_dir), report=all_reports, include_ewr=not args.no_ewr
-    )
-    for name, result in zip(names, results):
-        all_reports[name]["scenario"] = name
-        path = out_dir / f"{name}.csv"
-        result.points.to_csv(path, index=False)
-        print(f"  -> luu {path} ({path.stat().st_size / 1e6:.1f} MB)")
+    if configs:
+        results = build_all(
+            configs, Path(args.data_dir), report=all_reports, include_ewr=not args.no_ewr
+        )
+        for name, result in zip(names, results):
+            all_reports[name]["scenario"] = name
+            path = out_dir / f"{name}.csv"
+            result.points.to_csv(path, index=False)
+            print(f"  -> luu {path} ({path.stat().st_size / 1e6:.1f} MB)")
 
     report_path = Path(args.report)
     report_path.parent.mkdir(parents=True, exist_ok=True)

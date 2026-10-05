@@ -17,6 +17,7 @@ env/
 # Matplotlib / data outputs
 *.png
 !docs/**/*.png
+!outputs/screenshots/**/*.png
 *.pdf
 !docs/**/*.pdf
 
@@ -28,8 +29,11 @@ data/
 *.npz
 *.pkl
 
-# Kết quả sinh ra khi chạy
-outputs/
+# Kết quả sinh ra khi chạy.
+# GIU outputs/screenshots/ — anh chup fallback cho buoi thuyet trinh,
+# README tro toi nen phai commit.
+outputs/*
+!outputs/screenshots/
 figures/
 
 # Models

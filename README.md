@@ -193,3 +193,94 @@ Thứ tự ưu tiên các hotspot: theo **số chuyến mỗi giờ** (chuyến/
 - So sánh với KDE và Getis-Ord trên cùng tập dữ liệu, đo bằng **Silhouette** + đối chiếu số trạm thực tế.
 - Thay đổi `eps` (50 / 100 / 200 m) để khảo sát độ nhạy.
 - Chuẩn hoá theo **số chuyến mỗi giờ** và theo **diện tích vùng** thay vì tổng số chuyến.
+
+---
+
+# Ứng dụng web demo (Streamlit)
+
+Kế hoạch chi tiết: [`HOTSPOT_DEMO_IMPLEMENTATION_PLAN.md`](HOTSPOT_DEMO_IMPLEMENTATION_PLAN.md)
+
+## Chạy
+
+```bash
+pip install -r requirements.txt
+bash scripts/download_data.sh          # du lieu tho (~750 MB)
+python -m src.preprocess --full       # 4 kich ban + full.parquet (~90 MB)
+streamlit run app.py                  # mo http://localhost:8501
+```
+
+> `full.parquet` là bắt buộc cho app: 4 file kịch bản CSV đã cắt sẵn theo ca nên bộ lọc ngày/giờ sẽ không có tác dụng.
+
+## Kiến trúc
+
+```
+app.py                      chi dieu phoi UI — KHONG chua logic phan cum
+src/hotspot/
+  ├── data.py               tim + doc + chuan hoa dataset (tu suy ra ten file)
+  ├── filters.py            loc theo ngay/gio, khong mutate du lieu nguon
+  ├── dbscan.py             DBSCAN tren x_m/y_m (met)
+  ├── kde.py                KernelDensity + luoi uoc luong
+  ├── summaries.py          bang xep rank cum + chi so cap trang
+  └── map_layers.py         chuyen ket qua thanh lop folium
+tests/                      42 test cho filters / dbscan / summaries
+notebooks/03_baseline_dbscan.ipynb   quet eps x MinPts, chon tham so mac dinh
+scripts/capture_screenshots.py       chup fallback (dung Chrome san co)
+outputs/screenshots/                3 kich ban da chup
+```
+
+Logic phân cụm nằm trong `src/hotspot/` nên chạy được từ notebook, script hay pytest — không phụ thuộc Streamlit.
+
+## Tham số mặc định và căn cứ
+
+| Tham số | Mặc định | Căn cứ (đo trong `03_baseline_dbscan.ipynb`) |
+|---|---|---|
+| `eps` | **100 m** | 131 cụm, 6.3% nhiễu. Tách chi tiết hơn 150 m |
+| `MinPts` | **15** | tương đương "ít nhất 15 chuyến trong 100 m là một vùng đón" |
+| KDE bandwidth | **100 m** | cùng thang đo với `eps` nên hai tab so sánh được |
+| Giới hạn điểm DBSCAN | 200 000 | 1.7s thay vì 11.5s; app ghi rõ khi bị lấy mẫu |
+| Giới hạn điểm KDE | 30 000 | KDE chậm O(n × grid²): 30k là 3s, 200k là 53s |
+
+Đây là **giá trị mặc định cho demo**, không phải giá trị tối ưu chung.
+
+## Những gì app cố ý KHÔNG làm
+
+| Không làm | Vì sao |
+|---|---|
+| Vẽ đa giác bao quanh cụm | Ranh giới DBSCAN không phải hình học nào. Bao lồi/vòng tròn sẽ vẽ sai ranh giới thật |
+| Dùng `StandardScaler` trên lat/lon | Phá vỡ ranh giới không gian. Mọi khoảng cách tính trên `x_m`/`y_m` đã là mét |
+| Vẽ đủ mọi điểm lên bản đồ | 200k marker sinh file HTML ~260 MB, trình duyệt treo. Giới hạn số điểm vẽ, **số liệu trong bảng vẫn là số thật** |
+| Áp API key cho bản đồ | Dùng tile OSM — demo chạy được cả khi không có key |
+
+## Giới hạn đã biết
+
+**Cụm lớn nhất chiếm 84–88% dữ liệu ở mọi giá trị tham số đã thử** (50–300 m). Không phải lỗi cấu hình: Manhattan có mật độ điểm đón cao liên tục nên ở bán kính vài trăm mét các điểm nối thành một mạng liên thông.
+
+- Với câu hỏi *"khu nào đông?"* → kết quả đúng: 1 cụm lớn = Manhattan.
+- Với câu hỏi *"đứng ở đâu?"* → phải giảm `eps` xuống vài chục mét. **Chưa làm trong phạm vi này.**
+
+Nói "DBSCAN tìm được 131 hotspot" mà không kèm cụm lớn nhất chiếm 87% là con số sai.
+
+Ngoài ra:
+
+- App lấy mẫu 200 000 điểm nên số cụm có thể lệch vài so với chạy đủ 472 170 điểm.
+- Diện tích `area_km2` tính bằng **bao lồi** chỉ để tính mật độ so sánh — không phải ranh giới cụm.
+- Kết quả là **hotspot lịch sử** 4/2014–9/2014. Không phải dự báo nhu cầu, không phải khuyến nghị vị trí cho tài xế.
+- Chưa so sánh định lượng với K-Means.
+
+## Kịch bản demo 10 phút
+
+1. Mở app, giữ mặc định (Thứ 2–6, 18–20h, eps=100, MinPts=15) → 131 cụm, 6.3% nhiễu.
+2. **Kéo `eps` từ 100 xuống 50** → số cụm nhảy lên 215. Giải thích: bán kính nhỏ tách các vùng gần nhau.
+3. **Tăng `MinPts` lên 30** → cụm còn 87, nhiễu tăng. Giải thích: đòi nhiều chứng cứ hơn thì nhiều điểm thành nhiễu.
+4. Sang tab **Mật độ KDE** → mặt mật độ liên tục, không có ranh giới, không có "nhiễu".
+5. Kéo `bandwidth` KDE từ 100 lên 250 → các đỉnh dính lại, mất chi tiết.
+
+**Fallback nếu app chết:** `outputs/screenshots/` có 3 ảnh đã chụp (mặc định, `eps=50`, `MinPts=30`). Các bản đồ tĩnh đầy đủ: `outputs/baseline_ca_diem_thu7.html` và 2 ca còn lại.
+
+## Test
+
+```bash
+python -m pytest        # 42 test
+```
+
+Trong đó có `test_eps_is_metres_not_degrees` — dựng hai cụm cách nhau 500 m, kiểm chứng `eps=100` tách và `eps=600` gộp. Nếu `eps` bị đọc nhầm là độ thì cả hai nhánh đều cho kết quả giống nhau và test bắt được lỗi đó.
