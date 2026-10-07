@@ -1,8 +1,4 @@
-"""Tim, doc va chuan hoa dataset da xu ly.
-
-Khong ghi ten file cu the — suy ra tu file trong `data/processed/`.Neu thieu
-cot bat buoc thi nem loi ro rang thay vi doan.
-"""
+"""Tim, doc va chuan hoa artifact pickup da xu ly."""
 
 from __future__ import annotations
 
@@ -10,8 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-# Cot bat buoc sau khi chuan hoa. `x_m`/`y_m` la toa do phang don vi met,
-# nua mat neu co.
+# Cot bat buoc sau khi chuan hoa. `x_m`/`y_m` la toa do phang don vi met.
 REQUIRED = ["pickup_datetime", "latitude", "longitude"]
 METRE_COLS = ["x_m", "y_m"]
 
@@ -112,16 +107,25 @@ def load_dataset(name: str = "full", data_dir: Path | None = None) -> pd.DataFra
     df["latitude"] = df["latitude"].astype("float64")
     df["longitude"] = df["longitude"].astype("float64")
 
-    # Dac trung thoi gian — dung de loc, khong sua vao du lieu nguon.
+    # Dac trung chi tao trong bo nho; artifact tren dia khong bi sua.
+    df["date"] = df["pickup_datetime"].dt.date
     if "weekday" not in df.columns:
         df["weekday"] = df["pickup_datetime"].dt.dayofweek
+    df["weekday_name"] = df["pickup_datetime"].dt.day_name().astype("category")
     if "hour" not in df.columns:
         df["hour"] = df["pickup_datetime"].dt.hour
+
+    if "area" not in df.columns:
+        if "borough" not in df.columns:
+            raise ValueError(
+                f"{path.name} thieu cot khu vuc (`area` hoac `borough`)"
+            )
+        df["area"] = df["borough"].astype("string")
 
     if not all(c in df.columns for c in METRE_COLS):
         raise ValueError(
             f"{path.name} thieu cot toa do phang {METRE_COLS}.\n"
-            "Chay lai: python -m src.preprocess --full"
+            "Chay lai: python3 -m src.preprocess --full"
         )
 
     return df

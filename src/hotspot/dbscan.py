@@ -13,6 +13,9 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import DBSCAN
 
+from .filters import SpatialSelection, filter_context
+from .summaries import summarize_hotspots
+
 # Gia tri ngoai dai cua DBSCAN cho diem nhieu
 NOISE_LABEL = -1
 
@@ -49,6 +52,61 @@ class DBSCANResult:
     @property
     def noise_pct(self) -> float:
         return 100 * self.n_noise / self.n_points if self.n_points else 0.0
+
+
+@dataclass
+class HotspotAnalysis:
+    """Ket qua day du ma UI va test can biet ve mot ngu canh."""
+
+    points: pd.DataFrame = field(repr=False)
+    zones: pd.DataFrame
+    spatial_selection: SpatialSelection
+    weekday_selection: tuple[str, ...]
+    start_minute: int
+    window_minutes: int
+    available_matching_dates: int
+    eps_m: float
+    min_samples: int
+    runtime_seconds: float
+
+    @property
+    def area(self) -> str:
+        """Nhan tuong thich cho code map cu."""
+        return self.spatial_selection.label
+
+    @property
+    def start_hour(self) -> int:
+        """Gio tron gan nhat ve truoc, giu tuong thich voi contract cu."""
+        return self.start_minute // 60
+
+    @property
+    def n_points(self) -> int:
+        return len(self.points)
+
+    @property
+    def n_clusters(self) -> int:
+        return len(self.zones)
+
+    @property
+    def n_noise(self) -> int:
+        return int((self.points["cluster_id"] == NOISE_LABEL).sum())
+
+    @property
+    def noise_percentage(self) -> float:
+        return 100 * self.n_noise / self.n_points if self.n_points else 0.0
+
+    @property
+    def largest_cluster_percentage(self) -> float:
+        """Share of filtered pickups in the largest cluster."""
+        clustered = self.points.loc[self.points["cluster_id"] != NOISE_LABEL]
+        if clustered.empty or not self.n_points:
+            return 0.0
+        largest = int(clustered["cluster_id"].value_counts().max())
+        return 100 * largest / self.n_points
+
+    @property
+    def top_zones(self) -> pd.DataFrame:
+        return self.zones.head(3).copy()
 
 
 def run_dbscan(
@@ -102,6 +160,57 @@ def run_dbscan(
     )
     result.centroids = compute_centroids(work, result)
     return result
+
+
+def analyze_hotspots(
+    pickups: pd.DataFrame,
+    area: str | None = None,
+    weekday_selection: list[str] | tuple[str, ...] | None = None,
+    start_hour: int | None = None,
+    window_minutes: int = 60,
+    eps_m: float = 70,
+    min_samples: int = 15,
+    *,
+    spatial_selection: SpatialSelection | None = None,
+    start_minute: int | None = None,
+    max_points: int | None = 200_000,
+) -> HotspotAnalysis:
+    """Loc ngu canh, chay DBSCAN va tao bang uu tien co recurrence."""
+    if weekday_selection is None:
+        raise ValueError("Chon it nhat mot ngay trong tuan")
+    if spatial_selection is not None and area is not None:
+        raise ValueError("Khong truyen dong thoi spatial_selection va area")
+    selection = spatial_selection or SpatialSelection.for_borough(area or "")
+    if start_minute is not None and start_hour is not None:
+        raise ValueError("Khong truyen dong thoi start_minute va start_hour")
+    resolved_start = start_minute if start_minute is not None else (start_hour or 0) * 60
+
+    filtered, available_dates = filter_context(
+        pickups,
+        spatial_selection=selection,
+        weekday_selection=weekday_selection,
+        start_minute=resolved_start,
+        window_minutes=window_minutes,
+        max_points=max_points,
+    )
+    if filtered.empty:
+        raise ValueError("Khong co pickup nao khop khu vuc va khung gio da chon")
+
+    result = run_dbscan(filtered, eps_m=eps_m, min_samples=min_samples)
+    points = filtered.assign(cluster_id=result.labels)
+    zones = summarize_hotspots(points, available_dates)
+    return HotspotAnalysis(
+        points=points,
+        zones=zones,
+        spatial_selection=selection,
+        weekday_selection=tuple(weekday_selection),
+        start_minute=resolved_start,
+        window_minutes=window_minutes,
+        available_matching_dates=available_dates,
+        eps_m=float(eps_m),
+        min_samples=int(min_samples),
+        runtime_seconds=result.runtime_seconds,
+    )
 
 
 CENTROID_COLUMNS = {

@@ -1,33 +1,43 @@
-"""Ride Pickup Hotspot Explorer — phan tich phan cum hotspot don khach.
-
-Chia 2 lop:
-  - `data`, `filters`, `dbscan`, `kde`, `summaries`, `map_layers`: logic thuan
-    Python, khong import Streamlit -> chay duoc tu notebook, script, pytest.
-  - `app.py` (o thu muc goc): chi dieu phoi UI.
-
-Khong dung `StandardScaler` tren lat/lon. Moi do tinh tren toa do phang
-`x_m`, `y_m` (met) da chieu san o tang preprocessing.
-"""
+"""Pure analysis modules for the historical pickup hotspot demo."""
 
 from .data import DATASETS, available_datasets, dataset_info, load_dataset
-from .dbscan import DBSCANResult, run_dbscan
-from .filters import FilterSpec, filter_pickups, weekday_options
+from .dbscan import DBSCANResult, HotspotAnalysis, analyze_hotspots, run_dbscan
+from .filters import (
+    ContextPreview,
+    FilterSpec,
+    QueryTooLargeError,
+    SpatialSelection,
+    filter_context,
+    filter_pickups,
+    preview_context,
+    weekday_options,
+)
 from .kde import KDEResult, run_kde
-from .map_layers import build_map
-from .summaries import cluster_table, page_metrics
+from .map_layers import build_hotspot_map, build_raw_map
+from .summaries import cluster_table, page_metrics, summarize_hotspots
 
 __all__ = [
     "DATASETS",
     "DBSCANResult",
     "FilterSpec",
+    "HotspotAnalysis",
     "KDEResult",
-    "build_map",
+    "ContextPreview",
+    "QueryTooLargeError",
+    "SpatialSelection",
+    "analyze_hotspots",
+    "available_datasets",
+    "build_hotspot_map",
+    "build_raw_map",
     "cluster_table",
     "dataset_info",
+    "filter_context",
     "filter_pickups",
     "load_dataset",
     "page_metrics",
+    "preview_context",
     "run_dbscan",
     "run_kde",
+    "summarize_hotspots",
     "weekday_options",
 ]

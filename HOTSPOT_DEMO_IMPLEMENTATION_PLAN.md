@@ -1,107 +1,226 @@
-# Ride Pickup Hotspot Explorer — Implementation Plan
+# Ride Pickup Hotspot Explorer
 
-## 1. Purpose
+## Revised implementation plan for the coding agent
 
-Build a small local web demo for a Data Mining presentation on **density-based methods**. The user selects a time window from historical Uber pickup data in New York City and sees where pickup activity is dense.
+## 1. Product thesis
 
-The demo must make this distinction clear:
+This is **not** a generic DBSCAN visualizer and it is not a real-time dispatch system.
 
-- **DBSCAN** is the primary density-based clustering method. It outputs clusters and noise.
-- **KDE** is a density-estimation comparison view. It shows a continuous demand surface; it is not presented as a clustering algorithm by itself.
+The product answers one concrete decision question:
 
-The result represents **historical pickup hotspots**, not real-time driver dispatch advice or a demand forecast.
+> Given one selected borough or one user-drawn region and a recurring time context, which small areas have historically shown enough repeated pickup activity to be worth prioritizing as waiting zones?
 
-## 2. Scope and non-goals
+A driver cannot act on thousands of raw pickup dots. The application converts historical pickups into a short, ranked list of **historical priority zones**. It must say `historical pickup hotspot`, never claim a guaranteed customer or real-time demand forecast.
 
-### In scope
+## 2. Why DBSCAN is the method used
 
-- Load the already-preprocessed Uber TLC FOIL pickup dataset.
-- Filter pickups by selected day(s) of week and time window.
-- Run DBSCAN with meaningful controls in metres (`eps_m`, `min_samples`).
-- Show clustered pickup points, noise points, and a ranked hotspot summary.
-- Show a KDE density view on the exact same filtered points.
-- Provide a clean Streamlit interface suitable for a 5–10 minute live demo.
-- Cache data and computations enough that normal interactions remain responsive.
+Each raw record is a pickup event with a latitude, longitude and timestamp. A useful waiting zone should be a locally dense, spatially connected set of pickup events—not merely a point that happens to be close to a centroid.
 
-### Explicitly out of scope
+DBSCAN is appropriate because:
 
-- No FastAPI/backend service, database, authentication, deployment, or multi-user support.
-- No K-Means, hierarchical clustering, H3, Getis-Ord, road-network snapping, or real-time data.
-- No claim that the app recommends an exact street position for a driver.
-- No fake circular or convex-hull hotspot boundaries for DBSCAN.
-- Do not redo the preprocessing pipeline unless a required output column is absent.
+- the number of waiting zones is unknown in advance;
+- street-level pickup patterns can be irregular rather than circular;
+- isolated pickup events should not automatically become a recommended zone;
+- `eps` can be interpreted as a spatial tolerance in metres;
+- `MinPts` can be interpreted as the minimum local evidence required before calling a place dense.
 
-## 3. Input data contract
+Important limitations to preserve in copy and README:
 
-The implementation should find and inspect the existing preprocessed artifact rather than assume a hard-coded filename. It must preserve the original columns where available and require at least:
+- DBSCAN detects density in **observed historical pickups**, not unserved demand or current vehicle supply;
+- noise means `not part of a sufficiently dense hotspot under this query and these parameters`, not `no demand`;
+- DBSCAN does not generate road-following boundaries or polygons itself.
 
-| Logical field | Expected source field | Notes |
-|---|---|---|
-| pickup timestamp | `Date/Time` or normalized equivalent | Parse as a datetime once when loading. |
-| latitude | `Lat` or normalized equivalent | Decimal degrees. |
-| longitude | `Lon` or normalized equivalent | Decimal degrees. |
+## 3. The demo claim
 
-Recommended normalized columns in memory:
+The web demo must demonstrate this claim:
+
+> A hotspot is useful only in context. The app lets the user freely change one spatial region and one recurring time window, then rerun the same analysis instead of showing only preselected successful cases.
+
+Do **not** use `10% → 20% → 100% of arbitrary points` as the main demo. That only demonstrates sensitivity to sample size, not why a driver would use the product.
+
+The existing 10k/30k/full-data maps may be retained as an offline diagnostic or a limitation slide. They are not the primary application workflow.
+
+## 4. Core user journey
+
+### Default scenario
+
+Use a real, reproducible default scenario chosen from the cleaned dataset, for example:
 
 ```text
-pickup_datetime, latitude, longitude, weekday, hour, x_m, y_m
+Area: Brooklyn
+Recurring context: Friday
+Time window: 18:00–19:00
+Spatial tolerance: eps = 70 m
+Minimum local support: MinPts = <selected after baseline experiments>
 ```
 
-Use the preprocessing output as the source of truth. If projected coordinates are absent, calculate them in the analysis module using **EPSG:32618 (UTM zone 18N)** so DBSCAN uses metres directly. Do not z-score latitude/longitude.
+Do not hard-code this exact scenario if the available preprocessed file uses a different subset. Inspect the data and choose a high-activity, presentation-friendly scenario.
 
-The default demo slice should be chosen from the available data after a quick exploratory check. A sensible starting candidate is weekday, 18:00–20:00, Manhattan/central NYC, but do not hard-code it if the processed dataset uses a different geographic filter.
+### User flow
 
-## 4. User-visible behavior
+1. User selects one borough or draws one region, then chooses weekdays and a time window in 15-minute steps.
+2. The app pools historical pickup events that match the selected context.
+3. The user sees the raw pickup map and understands why raw points are not actionable.
+4. User clicks **Find priority zones**.
+5. DBSCAN runs on the filtered points and displays clusters, noise and a Top 3 ranked zone list.
+6. User changes the region or time window and reruns the single query to inspect how the result changes.
+7. Empty, noisy and over-merged outputs remain visible instead of being hidden or automatically tuned away.
 
-### Main journey
+## 5. Historical recurrence, not one-off density
 
-1. The page loads with a sensible default time window and DBSCAN parameters.
-2. The user changes the days of week and start/end hours.
-3. The user adjusts `eps_m` and `min_samples`, then clicks **Analyze hotspots**.
-4. The map shows:
-   - faint raw pickup points;
-   - DBSCAN clusters in distinct colors;
-   - noise in gray;
-   - one marker at each cluster centroid;
-   - no artificial polygon enclosing a cluster.
-5. The user can switch to the **KDE density** tab to see the continuous-density view for the same filtered pickups.
-6. A ranked table/cards list the top clusters by pickup count and density.
+The app should make a strong distinction between a one-off dense night and a recurring waiting zone.
 
-### Required UI controls
-
-- Days of week: multiselect, default to weekdays.
-- Start hour and end hour: integer selectors or a range slider.
-- `eps_m`: slider or numeric input, labelled in metres.
-- `min_samples`: slider or numeric input.
-- One explicit **Analyze hotspots** button so sliders do not accidentally rerun expensive work.
-- Tab or radio selector: `DBSCAN clusters` / `KDE density`.
-
-### Required result fields
-
-For each DBSCAN hotspot, calculate and display:
+For every DBSCAN cluster, calculate at minimum:
 
 ```text
-cluster_id
-pickup_count
+pickup_count                    # number of matching historical pickups
+support_dates                   # number of distinct calendar dates contributing pickup events
+available_matching_dates        # denominator for the query context
+pickups_per_matching_date       # pickup_count / available_matching_dates
 centroid_latitude
 centroid_longitude
-approximate_area_km2 (optional if robustly computed)
-pickup_density (only when area is available)
 ```
 
-At page level, display:
+The app may rank zones primarily by:
+
+1. `support_dates` descending;
+2. `pickups_per_matching_date` descending;
+3. `pickup_count` descending.
+
+The UI should phrase this as evidence, for example:
 
 ```text
-filtered_pickups
-number_of_clusters
-noise_count
-noise_percentage
-analysis_runtime_seconds
+Hotspot 1
+312 historical pickups
+Observed on 4 of 4 matching Fridays
+78 average pickups per matching Friday
 ```
 
-## 5. Architecture
+Do not invent a confidence score unless there is a documented formula.
 
-Use a **single Streamlit process**. Keep analysis code independent from Streamlit so it can be tested from a notebook or Python script.
+## 6. Input and preprocessing contract
+
+Preprocessing has already been completed. Treat the existing cleaned output as the source of truth; do not rebuild its pipeline unless a required field is missing.
+
+The loader must inspect the actual schema, then normalize these logical fields:
+
+| Logical field | Typical source name | Requirement |
+|---|---|---|
+| timestamp | `Date/Time` / `pickup_datetime` | Parsed datetime |
+| latitude | `Lat` / `latitude` | Decimal degrees |
+| longitude | `Lon` / `longitude` | Decimal degrees |
+| area | existing subset or derived area flag | Brooklyn for the first MVP |
+
+Create derived columns only in memory:
+
+```text
+date
+weekday_name
+hour
+x_m
+y_m
+```
+
+Project coordinates to a metre-based CRS before DBSCAN. For New York City, use an appropriate local UTM projection such as EPSG:32618, or use correctly implemented haversine distances. Never use a metre-valued `eps` directly on longitude/latitude degrees and do not z-score the geographic coordinates.
+
+## 7. DBSCAN analysis contract
+
+Implement a pure, testable function:
+
+```python
+analyze_hotspots(
+    pickups: pd.DataFrame,
+    spatial_selection: SpatialSelection,
+    weekday_selection: list[str],
+    start_minute: int,
+    window_minutes: int,
+    eps_m: float,
+    min_samples: int,
+) -> HotspotAnalysis
+```
+
+The function must:
+
+1. filter to the selected recurring context, including windows that cross midnight;
+2. apply exactly one borough or one user-drawn Polygon/MultiPolygon filter;
+3. run DBSCAN on projected `(x_m, y_m)` coordinates;
+4. label `-1` as noise;
+5. create cluster-level summaries and ranking values;
+6. return map-ready points plus result metadata.
+
+Suggested implementation:
+
+```python
+DBSCAN(eps=eps_m, min_samples=min_samples, metric="euclidean")
+```
+
+Start baseline tuning with the experimental values already available (`eps=70m` is a candidate). Keep `MinPts` fixed while comparing `eps`; document the selected defaults from observed outputs. If one cluster contains an unhelpfully large share of all points, treat that as an over-merging warning, not automatic evidence of one giant waiting zone.
+
+## 8. UI requirements
+
+Build a single local Streamlit app. Do not build a REST API, database, login system, deployment flow or separate frontend.
+
+### Controls
+
+- Spatial mode: choose exactly one borough, or draw exactly one rectangle/polygon.
+- Weekday multiselect with no preset grouping restriction.
+- Start/end time inputs in 15-minute steps, including overnight windows.
+- `eps` in metres and `MinPts` under an **Advanced settings** expander.
+- One explicit **Find priority zones** button.
+- One query/result at a time; no mandatory comparison panel.
+- Reject queries above 200,000 pickups with a clear narrowing message; do not silently sample DBSCAN input.
+
+### Primary map
+
+The map is the dominant view. Render:
+
+- raw pickup events as small, low-opacity dots;
+- DBSCAN cluster events in distinguishable colors;
+- noise in muted gray;
+- a labeled centroid marker for each Top 3 cluster.
+
+Do not draw a circle, convex hull or polygon and call it the DBSCAN boundary. A future geographic region layer may be added only if it is explicitly labeled as post-processing.
+
+### Result panel
+
+Show exactly the values that support the decision:
+
+```text
+filtered pickups
+clusters found
+noise percentage
+Top 3 priority zones
+pickup count and support dates per zone
+```
+
+Avoid generic dashboard cards, invented quality scores, unrelated charts and model-training language.
+
+## 9. Optional time animation
+
+Animation is optional polish, not the primary implementation risk.
+
+If implemented, it must move through **real contextual windows** rather than arbitrary data percentages:
+
+```text
+Friday 17:00–18:00 → Friday 18:00–19:00 → Friday 19:00–20:00
+```
+
+Keep the window duration, `eps` and `MinPts` fixed during playback. Cache or precompute each frame for smooth presentation. A manual time slider is acceptable and safer than autoplay.
+
+Do not portray this as incremental DBSCAN learning. Each frame is a new DBSCAN analysis on a different time-filtered event set.
+
+## 10. Diagnostic data-volume view (non-MVP)
+
+The existing three-panel comparison (10,000 / 30,000 / full points with fixed `eps=70m`) can be retained only as a diagnostic explaining sample-size sensitivity and density chaining.
+
+If it is shown:
+
+- keep `eps` **and** `MinPts` fixed;
+- make each smaller sample a nested subset of the next using one fixed random permutation and seed;
+- never imply that the colors identify the same cluster across frames;
+- describe it as a parameter/coverage diagnostic, not a driver recommendation.
+
+## 11. Implementation structure
 
 ```text
 project/
@@ -109,180 +228,79 @@ project/
 ├── requirements.txt
 ├── README.md
 ├── data/
-│   └── <existing preprocessed pickup artifact>
-├── src/
-│   └── hotspot/
-│       ├── __init__.py
-│       ├── data.py
-│       ├── filters.py
-│       ├── dbscan.py
-│       ├── kde.py
-│       ├── summaries.py
-│       └── map_layers.py
+│   └── <existing cleaned pickup artifact>
+├── src/hotspot/
+│   ├── __init__.py
+│   ├── data.py          # load and normalize cleaned artifact
+│   ├── filters.py       # area, weekday and time-window selection
+│   ├── dbscan.py        # analyze_hotspots and DBSCAN execution
+│   ├── summaries.py     # recurrence and Top 3 ranking
+│   └── map_layers.py    # map-ready point and centroid layers
 ├── notebooks/
-│   └── 01_baseline_experiments.ipynb
+│   └── 01_hotspot_baseline.ipynb
 └── tests/
     ├── test_filters.py
     ├── test_dbscan.py
     └── test_summaries.py
 ```
 
-### Module responsibilities
+Use `st.cache_data` for data loading and analysis results. Ensure all filters and DBSCAN parameters are part of the cached function inputs. Do not recompute on every slider movement; use the Analyze button.
 
-| Module | Responsibility |
-|---|---|
-| `data.py` | Locate, load, normalize and cache the processed dataset. |
-| `filters.py` | Apply weekday/hour/geographic filters without mutating source data. |
-| `dbscan.py` | Run DBSCAN on projected metre coordinates and return labels plus metadata. |
-| `kde.py` | Fit `KernelDensity`, score a spatial grid, and generate density/contour output. |
-| `summaries.py` | Build cluster-level metrics and ranked hotspot tables. |
-| `map_layers.py` | Convert result DataFrames/contours to map-ready layers. |
-| `app.py` | UI orchestration only; it must not contain clustering logic. |
+## 12. Vertical slices
 
-Recommended stack:
+### Slice 1 — Prove the decision scenario offline
 
-```text
-Python 3.11+
-streamlit
-pandas
-numpy
-scikit-learn
-pyproj
-pydeck or another performant Streamlit-compatible map layer
-matplotlib/scipy for KDE contour extraction
-pytest
-```
+Build the loader and the pure DBSCAN analysis function. In the notebook:
 
-Use `st.cache_data` for dataset loading and filtered slices, and `st.cache_resource` only for genuinely reusable resources. Never cache a result without including every clustering parameter in its cache key.
+- inspect date coverage and select a default scenario;
+- test several parameter combinations;
+- create a raw-points-versus-clusters result for the default query;
+- verify that the Top 3 summaries have sensible counts and distinct-date support.
 
-## 6. Modeling details
+**Done when:** the team can explain exactly which historical events created each ranked zone.
 
-### DBSCAN
+### Slice 2 — Working driver-question web flow
 
-```python
-DBSCAN(eps=eps_m, min_samples=min_samples, metric="euclidean")
-```
-
-This assumes `x_m` and `y_m` are UTM metre coordinates. Use labels `-1` as noise. Exclude noise from the hotspot ranking, but show its count and percentage.
-
-The implementation must not silently run DBSCAN on raw degree coordinates with a metre-valued `eps`.
-
-Start the baseline exploration with a small grid such as:
+Build one Streamlit page:
 
 ```text
-eps_m:       75, 100, 150
-min_samples: 10, 20, 30
+choose recurring context → Find priority zones → map + Top 3 results
 ```
 
-Choose default parameters only after looking at the map and reporting the choice in the README. Defaults are demo defaults, not universal optimum values.
+**Done when:** a user can answer `Where are the historically recurring pickup zones for this context?` without reading code or inspecting raw CSV.
 
-### KDE
+### Slice 3 — Free context exploration
 
-Fit KDE on the same projected coordinates used by DBSCAN. Evaluate it on a bounded 2-D grid derived from the filtered slice. Render the result as a density heatmap or contour overlay.
+Allow the presenter to change the borough or draw a single custom region, select arbitrary weekdays and a 15-minute-step time window, then rerun the analysis.
 
-Expose one `bandwidth_m` control if it can be implemented without making the UI crowded. Otherwise use a documented default bandwidth and retain the implementation as a comparison view.
+**Done when:** the presenter can show successful, sparse and noisy contexts without editing code or relying on fixed scenarios.
 
-Do not describe every high-density KDE pixel as an individual cluster. If a ranked KDE hotspot list is shown, define it explicitly using a threshold and connected high-density region logic.
+### Slice 4 — Polish and resilience
 
-## 7. Implementation order: vertical slices
+- Add concise explanations of `eps`, `MinPts` and noise.
+- Add loading/error states for empty filters and too-few-point selections.
+- Prepare fallback screenshots for the two chosen contexts.
+- Write README setup/run instructions and explicit limitations.
 
-### Slice 1 — Reproducible DBSCAN baseline
+**Done when:** the 5–10 minute demo can run locally without manual file edits or unplanned parameter tuning.
 
-**Goal:** prove that the existing processed data can yield credible clusters before building UI.
+## 13. Live presentation script supported by the web
 
-Tasks:
+1. **Decision:** `A driver should not choose a waiting place from a cloud of raw pickup points.`
+2. **Context:** select the prepared area, day condition and 18:00–19:00.
+3. **Analysis:** run DBSCAN; point out clusters and gray noise.
+4. **Decision output:** show the Top 3 recurring historical zones, including their support dates.
+5. **Context change:** switch to a later hour and show that the priority zones change.
+6. **Caveat:** explain that this is historical pickup evidence, not a real-time guarantee.
 
-- Locate the processed data and document its actual schema.
-- Implement the loader, normalization and time filtering.
-- Implement projected coordinates and a pure `run_dbscan` function.
-- Create `notebooks/01_baseline_experiments.ipynb` or an equivalent script.
-- Generate a static map/plot for at least three parameter combinations.
+## 14. Definition of done
 
-Acceptance criteria:
+The revised demo is complete only when:
 
-- The same data and parameters produce the same labels.
-- `eps_m` is demonstrably interpreted in metres.
-- The output reports points, clusters and noise.
-- One default demo configuration is selected from observed output.
-
-### Slice 2 — DBSCAN web vertical slice
-
-**Goal:** a presenter can choose a time window and show cluster/noise output in the browser.
-
-Tasks:
-
-- Create Streamlit layout and sidebar controls.
-- Wire the controls to the filtering and `run_dbscan` functions.
-- Render clustered/raw/noise points with a readable legend.
-- Add page-level metrics and a Top 3 hotspot table.
-- Add caching and an explicit Analyze button.
-
-Acceptance criteria:
-
-- The demo works from `streamlit run app.py` without a separate server.
-- Changing a parameter and clicking Analyze changes the result.
-- Noise is visibly distinguished from clusters.
-- The app remains usable on the chosen default slice.
-
-### Slice 3 — KDE comparison view
-
-**Goal:** show that a continuous density estimate answers a related but different question.
-
-Tasks:
-
-- Implement a testable KDE function on the filtered projected points.
-- Generate a bounded grid and a map-ready heatmap/contour result.
-- Add the KDE tab/view, preserving the exact selected filters.
-- Add a concise on-screen note: `KDE visualizes density; DBSCAN creates discrete clusters and noise.`
-
-Acceptance criteria:
-
-- Switching views does not change the selected dataset/time filter.
-- KDE reacts to bandwidth when that control is exposed.
-- The legend specifies what the density color scale means.
-
-### Slice 4 — Demo polish and reliability
-
-Tasks:
-
-- Make labels Vietnamese or consistently bilingual for the presentation.
-- Add help text explaining `eps`, `MinPts`, noise and KDE bandwidth.
-- Test at least three prepared scenarios: morning, evening, and late night.
-- Capture fallback screenshots for the default scenario and one parameter-change scenario.
-- Write a short README with setup/run instructions and known limitations.
-
-Acceptance criteria:
-
-- A new machine can install dependencies and run the app from the README.
-- No result claims real-time demand, causality, or a guaranteed driver recommendation.
-- The presenter can complete the prepared demo in under ten minutes.
-
-## 8. Presentation script supported by the app
-
-1. **Problem:** many pickup points do not directly show where demand concentrates.
-2. **Filter:** choose weekday, 18:00–20:00 (or the selected default scenario).
-3. **DBSCAN:** explain colored groups, gray noise, `eps` in metres and `MinPts` as minimum local support.
-4. **Interaction:** change `eps` once to show that nearby dense groups can merge or separate.
-5. **KDE:** switch view to show density continuously rather than assigning every point a discrete cluster.
-6. **Conclusion:** DBSCAN is useful when dense groups and noise matter; KDE is useful when the goal is a smooth intensity map.
-
-## 9. Guardrails for the coding agent
-
-- Do not add a REST API, database, auth flow, cloud deployment, or unrelated UI pages.
-- Do not replace DBSCAN with K-Means just because it is easier to visualize.
-- Do not use `StandardScaler` on latitude/longitude for the spatial distance calculation.
-- Do not draw a circle or convex hull and claim it is the exact DBSCAN boundary.
-- Do not state that `Base` means a driver, passenger type, or demand level; it is only an associated Uber base code.
-- Prefer a working, readable local demo over an elaborate architecture.
-- If the preprocessed file's schema differs from this plan, adapt the loader and document the actual mapping instead of guessing.
-
-## 10. Definition of done
-
-The work is complete when all of the following are true:
-
-- A local Streamlit app runs with the preprocessed Uber pickup data.
-- The user can filter by time and run DBSCAN with visible cluster/noise results.
-- The app includes a KDE density comparison for the same filtered data.
-- The DBSCAN implementation uses a spatial metric in metres correctly.
-- The app surfaces an understandable Top 3 hotspot summary.
-- The repository has a concise README and the presenter has fallback screenshots.
+- the app answers a concrete waiting-zone question, not merely visualizes clusters;
+- DBSCAN runs with a correct metre-based spatial distance;
+- output zones expose repeated historical support, not only total point count;
+- users can freely rerun one query for different real spatial and temporal contexts;
+- raw points, clusters and noise are visually distinct;
+- no claim says DBSCAN learns incrementally, creates road-following boundaries or predicts current demand;
+- the app runs locally with one documented command and has fallback screenshots.

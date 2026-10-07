@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from hotspot.dbscan import run_dbscan
-from hotspot.summaries import cluster_table, page_metrics
+from hotspot.summaries import cluster_table, page_metrics, summarize_hotspots
 
 
 @pytest.fixture
@@ -123,3 +123,55 @@ def test_empty_result_gives_empty_table(frame):
     table = cluster_table(frame, result)
     assert table.empty
     assert "pickup_count" in table.columns
+
+
+def test_recurring_summary_ranks_support_dates_before_pickup_count():
+    labeled = pd.DataFrame(
+        {
+            "cluster_id": [0, 0, 0, 1, 1, 1, 1, 1, -1],
+            "date": [
+                "2024-01-05",
+                "2024-01-12",
+                "2024-01-19",
+                "2024-01-05",
+                "2024-01-05",
+                "2024-01-05",
+                "2024-01-12",
+                "2024-01-12",
+                "2024-01-05",
+            ],
+            "latitude": [40.7] * 9,
+            "longitude": [-73.9] * 9,
+        }
+    )
+
+    table = summarize_hotspots(labeled, available_matching_dates=4)
+
+    assert table["cluster_id"].tolist() == [0, 1]
+    assert table["support_dates"].tolist() == [3, 2]
+    assert table["pickup_count"].tolist() == [3, 5]
+    assert table["pickups_per_matching_date"].tolist() == [0.75, 1.25]
+    assert -1 not in table["cluster_id"].tolist()
+
+
+def test_recurring_summary_empty_result_has_stable_schema():
+    labeled = pd.DataFrame(
+        {
+            "cluster_id": [-1],
+            "date": ["2024-01-05"],
+            "latitude": [40.7],
+            "longitude": [-73.9],
+        }
+    )
+    table = summarize_hotspots(labeled, available_matching_dates=1)
+    assert table.empty
+    assert list(table.columns) == [
+        "rank",
+        "cluster_id",
+        "pickup_count",
+        "support_dates",
+        "available_matching_dates",
+        "pickups_per_matching_date",
+        "centroid_latitude",
+        "centroid_longitude",
+    ]

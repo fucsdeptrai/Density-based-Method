@@ -2,12 +2,62 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 
-from .dbscan import DBSCANResult
+if TYPE_CHECKING:
+    from .dbscan import DBSCANResult
 
 EARTH_R = 6_371_000.0
+
+
+HOTSPOT_COLUMNS = {
+    "rank": "int64",
+    "cluster_id": "int64",
+    "pickup_count": "int64",
+    "support_dates": "int64",
+    "available_matching_dates": "int64",
+    "pickups_per_matching_date": "float64",
+    "centroid_latitude": "float64",
+    "centroid_longitude": "float64",
+}
+
+
+def summarize_hotspots(
+    labeled_points: pd.DataFrame,
+    available_matching_dates: int,
+) -> pd.DataFrame:
+    """Xep hang cum bang do lap lai theo ngay, roi moi den tong pickup."""
+    clustered = labeled_points[labeled_points["cluster_id"] != -1]
+    if clustered.empty:
+        return pd.DataFrame(
+            {name: pd.Series(dtype=dtype) for name, dtype in HOTSPOT_COLUMNS.items()}
+        )
+    if available_matching_dates < 1:
+        raise ValueError("Khong co ngay lich su nao khop ngu canh da chon")
+
+    table = (
+        clustered.groupby("cluster_id", as_index=False)
+        .agg(
+            pickup_count=("cluster_id", "size"),
+            support_dates=("date", "nunique"),
+            centroid_latitude=("latitude", "mean"),
+            centroid_longitude=("longitude", "mean"),
+        )
+    )
+    table["available_matching_dates"] = available_matching_dates
+    table["pickups_per_matching_date"] = (
+        table["pickup_count"] / available_matching_dates
+    )
+    table = table.sort_values(
+        ["support_dates", "pickups_per_matching_date", "pickup_count"],
+        ascending=False,
+        kind="stable",
+    ).reset_index(drop=True)
+    table.insert(0, "rank", range(1, len(table) + 1))
+    return table[list(HOTSPOT_COLUMNS)]
 
 
 def _convex_hull_area_m2(x: np.ndarray, y: np.ndarray) -> float:

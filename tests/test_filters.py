@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from hotspot.filters import WEEKDAY_NAMES, FilterSpec, filter_pickups
+from hotspot.filters import WEEKDAY_NAMES, FilterSpec, filter_context, filter_pickups
 
 
 @pytest.fixture
@@ -90,3 +90,68 @@ def test_describe_lists_day_names():
 def test_index_is_reset(sample):
     out = filter_pickups(sample, FilterSpec(weekdays=(2,), hour_start=0, hour_end=24))
     assert list(out.index) == list(range(len(out)))
+
+
+def context_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "pickup_datetime": pd.to_datetime(
+                [
+                    "2024-01-05 18:00",
+                    "2024-01-05 18:59",
+                    "2024-01-05 19:00",
+                    "2024-01-12 09:00",
+                    "2024-01-06 18:30",
+                    "2024-01-05 18:30",
+                ]
+            ),
+            "area": ["Brooklyn"] * 5 + ["Queens"],
+            "latitude": [40.7] * 6,
+            "longitude": [-73.9] * 6,
+            "x_m": range(6),
+            "y_m": range(6),
+        }
+    )
+
+
+def test_context_filter_uses_area_weekday_and_half_open_hour():
+    source = context_frame()
+    out, available_dates = filter_context(
+        source,
+        area="brooklyn",
+        weekday_selection=["Friday"],
+        start_hour=18,
+        window_minutes=60,
+    )
+
+    assert out["pickup_datetime"].dt.strftime("%H:%M").tolist() == ["18:00", "18:59"]
+    assert available_dates == 2
+    assert out["date"].nunique() == 1
+
+
+def test_context_filter_does_not_mutate_source():
+    source = context_frame()
+    before = source.copy()
+    filter_context(
+        source,
+        area="Brooklyn",
+        weekday_selection=["Friday"],
+        start_hour=18,
+        window_minutes=60,
+    )
+    pd.testing.assert_frame_equal(source, before)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"area": "", "weekday_selection": ["Friday"], "start_hour": 18, "window_minutes": 60},
+        {"area": "Brooklyn", "weekday_selection": [], "start_hour": 18, "window_minutes": 60},
+        {"area": "Brooklyn", "weekday_selection": ["Funday"], "start_hour": 18, "window_minutes": 60},
+        {"area": "Brooklyn", "weekday_selection": ["Friday"], "start_hour": 24, "window_minutes": 60},
+        {"area": "Brooklyn", "weekday_selection": ["Friday"], "start_hour": 18, "window_minutes": 61},
+    ],
+)
+def test_context_filter_rejects_invalid_query(kwargs):
+    with pytest.raises(ValueError):
+        filter_context(context_frame(), **kwargs)

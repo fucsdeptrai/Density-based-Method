@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from hotspot.dbscan import NOISE_LABEL, run_dbscan
+from hotspot.dbscan import NOISE_LABEL, analyze_hotspots, run_dbscan
 
 
 def make_frame(x: np.ndarray, y: np.ndarray) -> pd.DataFrame:
@@ -124,3 +124,98 @@ def test_min_samples_counts_the_point_itself():
     res = run_dbscan(frame, eps_m=50, min_samples=1)
     assert res.n_clusters == 2
     assert res.n_noise == 0
+
+
+def recurring_frame() -> pd.DataFrame:
+    rows = []
+    for date in ("2024-01-05", "2024-01-12", "2024-01-19"):
+        for offset in (0.0, 1.0, 2.0):
+            rows.append(
+                {
+                    "pickup_datetime": pd.Timestamp(f"{date} 18:15"),
+                    "area": "Brooklyn",
+                    "x_m": offset,
+                    "y_m": offset,
+                    "latitude": 40.70 + offset * 1e-6,
+                    "longitude": -73.90,
+                }
+            )
+    for date in ("2024-01-05", "2024-01-12"):
+        for offset in (0.0, 1.0, 2.0):
+            rows.append(
+                {
+                    "pickup_datetime": pd.Timestamp(f"{date} 18:30"),
+                    "area": "Brooklyn",
+                    "x_m": 100 + offset,
+                    "y_m": offset,
+                    "latitude": 40.71 + offset * 1e-6,
+                    "longitude": -73.91,
+                }
+            )
+    rows.extend(
+        [
+            {
+                "pickup_datetime": pd.Timestamp("2024-01-05 18:45"),
+                "area": "Brooklyn",
+                "x_m": 1_000.0,
+                "y_m": 1_000.0,
+                "latitude": 40.72,
+                "longitude": -73.92,
+            },
+            {
+                "pickup_datetime": pd.Timestamp("2024-01-26 09:00"),
+                "area": "Brooklyn",
+                "x_m": 2_000.0,
+                "y_m": 2_000.0,
+                "latitude": 40.73,
+                "longitude": -73.93,
+            },
+        ]
+    )
+    return pd.DataFrame(rows)
+
+
+def test_analyze_hotspots_returns_ranked_recurring_zones():
+    analysis = analyze_hotspots(
+        recurring_frame(),
+        area="Brooklyn",
+        weekday_selection=["Friday"],
+        start_hour=18,
+        window_minutes=60,
+        eps_m=5,
+        min_samples=2,
+    )
+
+    assert analysis.n_points == 16
+    assert analysis.n_clusters == 2
+    assert analysis.n_noise == 1
+    assert analysis.available_matching_dates == 4
+    assert analysis.top_zones["support_dates"].tolist() == [3, 2]
+    assert analysis.top_zones["pickup_count"].tolist() == [9, 6]
+    assert analysis.top_zones["pickups_per_matching_date"].tolist() == [2.25, 1.5]
+
+
+def test_analyze_hotspots_reports_largest_cluster_share():
+    analysis = analyze_hotspots(
+        recurring_frame(),
+        area="Brooklyn",
+        weekday_selection=["Friday"],
+        start_hour=18,
+        window_minutes=60,
+        eps_m=5,
+        min_samples=2,
+    )
+    assert analysis.largest_cluster_percentage == pytest.approx(100 * 9 / 16)
+
+
+def test_analyze_hotspots_rejects_empty_context():
+    with pytest.raises(ValueError, match="Khong co pickup"):
+        analyze_hotspots(
+            recurring_frame(),
+            area="Queens",
+            weekday_selection=["Friday"],
+            start_hour=18,
+            window_minutes=60,
+            eps_m=5,
+            min_samples=2,
+        )

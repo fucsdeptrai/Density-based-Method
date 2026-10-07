@@ -1,13 +1,8 @@
-"""Ride Pickup Hotspot Explorer — Streamlit app.
-
-Chay:  streamlit run app.py
-
-App KHONG chua logic phan cum — moi thu goi tu `src.hotspot`. Muc dich la
-giup moi thay doi tham so roi bam "Phan tich" moi chay lai.
-"""
+"""Streamlit UI for freely querying one historical pickup context."""
 
 from __future__ import annotations
 
+from datetime import time, timedelta
 import sys
 from pathlib import Path
 
@@ -19,302 +14,469 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from streamlit_folium import st_folium  # noqa: E402
 
-from hotspot import (  # noqa: E402
-    DATASETS,
-    FilterSpec,
-    run_dbscan,
-    run_kde,
-    weekday_options,
+from hotspot.data import load_dataset  # noqa: E402
+from hotspot.dbscan import HotspotAnalysis, analyze_hotspots  # noqa: E402
+from hotspot.filters import (  # noqa: E402
+    ENGLISH_WEEKDAYS,
+    QueryTooLargeError,
+    SpatialSelection,
+    preview_context,
 )
-from hotspot.data import available_datasets, load_dataset  # noqa: E402
-from hotspot.filters import filter_pickups  # noqa: E402
-from hotspot.map_layers import build_dbscan_map, build_kde_map  # noqa: E402
-from hotspot.summaries import cluster_table, page_metrics  # noqa: E402
+from hotspot.map_layers import build_hotspot_map, build_raw_map  # noqa: E402
 
-# Tham so chon san cho buoi thuyet trinh. Chi la gia tri MAC DINH — nguoi
-# dung doi duoc, va README ghi ro day khong phai gia tri toi uu chung.
-DEFAULT_EPS_M = 100
+
+DEFAULT_AREA = "Brooklyn"
+DEFAULT_EPS_M = 70
 DEFAULT_MIN_SAMPLES = 15
-DEFAULT_BANDWIDTH_M = 100
+MAX_ANALYSIS_POINTS = 200_000
 
-# So diem toi da. DBSCAN nhanh (200k ~2s) nhưng KDE chậm theo O(n x grid^2):
-# 200k diem + luoi 180x180 mat ~53s. Dùng cap riêng cho KDE de tab chuyen
-# nhanh khong bi treo. Khi bi cap, app hien thi canh bao.
-POINT_CAP_DBSCAN = 200_000
-POINT_CAP_KDE = 30_000
-KDE_GRID = 160
+DAY_LABELS = {
+    "Monday": "Thứ Hai",
+    "Tuesday": "Thứ Ba",
+    "Wednesday": "Thứ Tư",
+    "Thursday": "Thứ Năm",
+    "Friday": "Thứ Sáu",
+    "Saturday": "Thứ Bảy",
+    "Sunday": "Chủ Nhật",
+}
 
-# Ban do ve toi da diem theo cum. MarkerCluster the cum + nhieu thi phai ve
-# CA HAI, nen cao hon muc hien thi.
-MAX_POINTS_PER_CLUSTER = 400
-MAX_NOISE_POINTS = 2_000
-MAX_RAW_POINTS = 1_200
+AREA_VIEWS = {
+    "Bronx": ((40.8448, -73.8648), 12),
+    "Brooklyn": ((40.6782, -73.9442), 12),
+    "EWR": ((40.6895, -74.1745), 13),
+    "Manhattan": ((40.7831, -73.9712), 12),
+    "Queens": ((40.7282, -73.7949), 11),
+    "Staten Island": ((40.5795, -74.1502), 11),
+}
 
 st.set_page_config(
-    page_title="Hotspot don khach — Density-based",
+    page_title="Vùng đón khách ưu tiên trong lịch sử",
     page_icon="🗺️",
     layout="wide",
 )
 
-# Tâm bản đồ theo vùng phân tích. Dùng OSM tile nen khong can API key.
-REGION_CENTER = {
-    "manhattan": (40.739, -73.974, 12),
-    "bronx": (40.85, -73.87, 11),
-    "queens": (40.73, -73.79, 11),
-    "brooklyn": (40.68, -73.95, 11),
-    # Zoom 12: dataset "full" trai rong ca 5 quan + EWR, zoom 11 keo man hinh
-    # ra toi Hackensack/Newark nen cuc du khai quang.
-    "full": (40.739, -73.974, 12),
-}
 
-st.title("Xác định hotspot đón khách — phương pháp density-based")
+@st.cache_data(show_spinner="Đang tải dữ liệu pickup đã làm sạch…")
+def cached_load() -> pd.DataFrame:
+    return load_dataset("full")
+
+
+def make_selection(borough: str | None, geometry_json: str | None) -> SpatialSelection:
+    if geometry_json:
+        return SpatialSelection(geometry_json=geometry_json)
+    if borough:
+        return SpatialSelection.for_borough(borough)
+    raise ValueError("Hãy chọn một borough hoặc vẽ một vùng trên bản đồ")
+
+
+@st.cache_data(show_spinner=False)
+def cached_preview(
+    borough: str | None,
+    geometry_json: str | None,
+    weekdays: tuple[str, ...],
+    start_minute: int,
+    window_minutes: int,
+):
+    return preview_context(
+        cached_load(),
+        spatial_selection=make_selection(borough, geometry_json),
+        weekday_selection=weekdays,
+        start_minute=start_minute,
+        window_minutes=window_minutes,
+    )
+
+
+@st.cache_data(show_spinner="Đang tìm các vùng đón khách ưu tiên…")
+def cached_analysis(
+    borough: str | None,
+    geometry_json: str | None,
+    weekdays: tuple[str, ...],
+    start_minute: int,
+    window_minutes: int,
+    eps_m: int,
+    min_samples: int,
+) -> HotspotAnalysis:
+    return analyze_hotspots(
+        cached_load(),
+        spatial_selection=make_selection(borough, geometry_json),
+        weekday_selection=weekdays,
+        start_minute=start_minute,
+        window_minutes=window_minutes,
+        eps_m=eps_m,
+        min_samples=min_samples,
+        max_points=MAX_ANALYSIS_POINTS,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def cached_global_sample(max_points: int = 1_500) -> pd.DataFrame:
+    pickups = cached_load()
+    if len(pickups) <= max_points:
+        return pickups
+    return pickups.sample(max_points, random_state=0).sort_index()
+
+
+def minute_value(value: time) -> int:
+    return value.hour * 60 + value.minute
+
+
+def time_window(start: time, end: time) -> tuple[int, int]:
+    start_minute = minute_value(start)
+    duration = (minute_value(end) - start_minute) % (24 * 60)
+    return start_minute, duration or 24 * 60
+
+
+def format_minute(minute: int) -> str:
+    minute %= 24 * 60
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def window_label(start_minute: int, window_minutes: int) -> str:
+    end = start_minute + window_minutes
+    suffix = " (+1 ngày)" if end > 24 * 60 else ""
+    return f"{format_minute(start_minute)}–{format_minute(end)}{suffix}"
+
+
+def area_view(selection: SpatialSelection) -> tuple[tuple[float, float], int]:
+    if selection.borough:
+        return AREA_VIEWS.get(selection.borough, ((40.739, -73.974), 11))
+    return (40.7128, -74.0060), 11
+
+
+def drawing_geometry(map_state: dict | None) -> dict | None:
+    if not map_state:
+        return None
+    drawing = map_state.get("last_active_drawing")
+    if drawing is None:
+        drawings = map_state.get("all_drawings") or []
+        drawing = drawings[-1] if drawings else None
+    if not drawing:
+        return None
+    geometry = drawing.get("geometry", drawing)
+    if geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+        return None
+    return geometry
+
+
+def render_zone_list(analysis: HotspotAnalysis) -> None:
+    st.subheader("Top 3 vùng ưu tiên")
+    if analysis.top_zones.empty:
+        st.warning(
+            "Không có pickup nào đủ mật độ để tạo hotspot với cấu hình này. "
+            "Đây vẫn là một kết quả hợp lệ; có thể điều chỉnh eps hoặc MinPts để khảo sát."
+        )
+        return
+
+    for zone in analysis.top_zones.itertuples():
+        st.markdown(
+            f"**Hotspot {int(zone.rank)}**  \n"
+            f"{int(zone.pickup_count):,} pickup lịch sử · "
+            f"xuất hiện trong {int(zone.support_dates)}/{int(zone.available_matching_dates)} "
+            f"ngày phù hợp · trung bình {zone.pickups_per_matching_date:.1f} "
+            "pickup/ngày phù hợp"
+        )
+
+
+def render_analysis(analysis: HotspotAnalysis) -> None:
+    metric_a, metric_b, metric_c = st.columns(3)
+    metric_a.metric("Pickup đã lọc", f"{analysis.n_points:,}")
+    metric_b.metric("Hotspot tìm thấy", f"{analysis.n_clusters:,}")
+    metric_c.metric("Tỷ lệ noise", f"{analysis.noise_percentage:.1f}%")
+
+    if analysis.largest_cluster_percentage > 50:
+        st.warning(
+            "Một cụm chứa hơn một nửa số pickup đã lọc. Đây có thể là dấu hiệu "
+            "density chaining/over-merging, không phải bằng chứng về một vùng chờ khổng lồ."
+        )
+
+    map_column, result_column = st.columns([2, 1], gap="large")
+    center, zoom = area_view(analysis.spatial_selection)
+    with map_column:
+        st_folium(
+            build_hotspot_map(analysis, center=center, zoom=zoom),
+            height=620,
+            use_container_width=True,
+            key="hotspot-result-map",
+            returned_objects=[],
+        )
+        st.caption(
+            "Chấm màu là pickup thuộc hotspot; chấm xám là noise. Marker 1–3 là "
+            "trọng tâm Top 3, không phải ranh giới DBSCAN. Đường xanh đứt nét, nếu có, "
+            "chỉ là phạm vi lọc do người dùng vẽ."
+        )
+
+    with result_column:
+        render_zone_list(analysis)
+        st.caption(
+            f"Bằng chứng được tổng hợp trên {analysis.available_matching_dates} ngày lịch sử "
+            "phù hợp với các thứ đã chọn."
+        )
+
+
+st.title("Vùng đón khách ưu tiên trong lịch sử")
 st.caption(
-    "Dữ liệu Uber NYC 4/2014–9/2014. Kết quả là **hotspot lịch sử**, "
-    "không phải dự báo nhu cầu hay khuyến nghị vị trí cho tài xế."
+    "Tự chọn một khu vực và ngữ cảnh thời gian để kiểm tra hotspot pickup lịch sử. "
+    "Kết quả không phải dữ liệu thời gian thực, dự báo nhu cầu hay đảm bảo có khách."
 )
 
+try:
+    pickups = cached_load()
+except (FileNotFoundError, ValueError) as exc:
+    st.error(str(exc))
+    st.code("bash scripts/download_data.sh\npython3 -m src.preprocess --full")
+    st.stop()
 
-@st.cache_data(show_spinner="Đang tải dữ liệu…")
-def cached_load(name: str) -> pd.DataFrame:
-    return load_dataset(name)
+available_areas = sorted(pickups["area"].dropna().astype(str).unique())
+del pickups
+if not available_areas:
+    st.error("Dataset không có khu vực để phân tích.")
+    st.stop()
 
-
-@st.cache_data(show_spinner="Đang lọc…")
-def cached_filter(name: str, weekdays: tuple[int, ...], h0: int, h1: int) -> pd.DataFrame:
-    return filter_pickups(cached_load(name), FilterSpec(weekdays, h0, h1))
-
-
-@st.cache_data(show_spinner="Đang chạy DBSCAN…")
-def cached_dbscan(name: str, weekdays: tuple[int, ...], h0: int, h1: int, eps: int, mpts: int):
-    df = cached_filter(name, weekdays, h0, h1)
-    return df, run_dbscan(df, eps, mpts, point_cap=POINT_CAP_DBSCAN)
-
-
-@st.cache_data(show_spinner="Đang uoc luong KDE…")
-def cached_kde(name: str, weekdays: tuple[int, ...], h0: int, h1: int, bw: int):
-    df = cached_filter(name, weekdays, h0, h1)
-    return df, run_kde(df, bw, grid_size=KDE_GRID, point_cap=POINT_CAP_KDE)
-
-
-# --------------------------------------------------------------------------- #
-# Sidebar
-# --------------------------------------------------------------------------- #
 with st.sidebar:
-    st.header("1. Dataset")
-
-    choices = available_datasets()
-    if not choices:
-        st.error(
-            "Chưa có dataset trong `data/processed/`.\n\n"
-            "```bash\nbash scripts/download_data.sh\npython -m src.preprocess --full\n```"
-        )
-        st.stop()
-
-    dataset = st.selectbox(
-        "Chọn dataset",
-        choices,
-        format_func=lambda n: DATASETS[n]["label"],
-        help="`full` = mọi ngày, mọi giờ (chọn được tự do). "
-        "Các dataset còn lại đã cắt sẵn theo ca nên bộ lọc sẽ không có tác dụng.",
+    st.header("1. Không gian")
+    spatial_mode = st.radio(
+        "Cách chọn khu vực",
+        ["Theo borough", "Vẽ một vùng"],
+        horizontal=True,
     )
-    st.caption(DATASETS[dataset]["description"])
-
-    st.header("2. Khoảng thời gian")
-    day_labels = dict(weekday_options())
-    days = st.multiselect(
-        "Ngày trong tuần",
-        options=[d for d, _ in weekday_options()],
-        default=[0, 1, 2, 3, 4],
-        format_func=lambda d: day_labels[d],
-    )
-    h0 = st.slider("Giờ bắt đầu", 0, 23, 18)
-    h1 = st.slider("Giờ kết thúc", 1, 24, 20)
-
-    st.header("3. Tham số")
-    eps_m = st.slider(
-        "eps — bán kính lân cận (mét)",
-        20, 400, DEFAULT_EPS_M, step=5,
-        help="Hai điểm cách nhau ≤ eps mét thì được coi là lân cận. "
-        "Tăng → các cụm gần nhau có thể dính lại; giảm → tách nhỏ hơn, nhiều noise hơn.",
-    )
-    min_samples = st.slider(
-        "MinPts — số điểm tối thiểu",
-        2, 100, DEFAULT_MIN_SAMPLES,
-        help="Cần tối thiểu bao nhiêu điểm trong bán kính eps thì hình thành một cụm. "
-        "Ý nghĩa nghiệp vụ: 'ít nhất MinPts chuyến đón trong eps mét thì coi là vùng đón'.",
-    )
-    bandwidth_m = st.slider(
-        "KDE — bandwidth (mét)",
-        20, 400, DEFAULT_BANDWIDTH_M, step=5,
-        help="Độ rộng kernel. Nhỏ → chi tiết, nhiều đỉnh; lớn → mặt độ mượt, các cụm dính lại.",
-    )
-    hot_pct = st.slider(
-        "KDE — ngưỡng vùng nóng (%)", 50, 99, 90,
-        help="Đường viền bao quanh các vùng có mật độ thuộc top (100 − ngưỡng)% .",
-    )
-
-    if st.button("Phân tích hotspot", type="primary", use_container_width=True):
-        # Luu vao session_state: nut Streamlit chi tra True trong lan chay
-        # sinh ra cua chinh no. Component st_folium tao mot lan chay lai,
-        # nen luu lai de ket qua khong bien mat ngay sau khi ve ban do.
-        st.session_state["analyze"] = True
-        st.session_state["last_params"] = (
-            dataset, tuple(sorted(days)), h0, h1, eps_m, min_samples, bandwidth_m, hot_pct
+    selected_borough = None
+    if spatial_mode == "Theo borough":
+        selected_borough = st.selectbox(
+            "Borough",
+            available_areas,
+            index=(
+                available_areas.index(DEFAULT_AREA)
+                if DEFAULT_AREA in available_areas
+                else 0
+            ),
         )
 
-    # Dung lai tham so cua lan bam gan nhat cho ca hai tab
-    analyze = st.session_state.get("analyze", False)
-    if analyze and st.session_state.get("last_params"):
-        dataset, days, h0, h1, eps_m, min_samples, bandwidth_m, hot_pct = st.session_state[
-            "last_params"
-        ]
+    st.header("2. Thời gian lặp lại")
+    weekdays = tuple(
+        st.multiselect(
+            "Ngày trong tuần",
+            ENGLISH_WEEKDAYS,
+            default=["Friday"],
+            format_func=lambda day: DAY_LABELS[day],
+        )
+    )
+    start_time = st.time_input(
+        "Bắt đầu",
+        value=time(18, 0),
+        step=timedelta(minutes=15),
+    )
+    end_time = st.time_input(
+        "Kết thúc",
+        value=time(19, 0),
+        step=timedelta(minutes=15),
+        help="Giờ kết thúc sớm hơn giờ bắt đầu được hiểu là cửa sổ qua đêm.",
+    )
+
+    with st.expander("3. Cài đặt DBSCAN"):
+        eps_m = st.slider(
+            "eps — khoảng cách lân cận (mét)",
+            min_value=20,
+            max_value=200,
+            value=DEFAULT_EPS_M,
+            step=5,
+        )
+        min_samples = st.slider(
+            "MinPts — hỗ trợ cục bộ tối thiểu",
+            min_value=3,
+            max_value=50,
+            value=DEFAULT_MIN_SAMPLES,
+        )
 
     st.divider()
-    with st.expander("Giải thích nhanh"):
-        st.markdown(
-            "- **Cụm (cluster)**: vùng có mật độ điểm đón cao → hotspot.\n"
-            "- **Nhiễu (noise)**: điểm lẻ lưa, không thuộc cụm nào → bị loại.\n"
-            "- **eps** đơn vị **mét**, nhờ đã chiếu toạ độ sang hệ phẳng (`x_m`, `y_m`).\n"
-            "- Toạ độ lat/lon **không** được chuẩn hoá (z-score) — làm vỡ ranh giới không gian.\n"
-            "- Ranh giới cụm không vẽ thành hình: ranh giới DBSCAN không phải hình học nào."
-        )
-
-if not analyze:
-    st.info("Chọn khoảng thời gian rồi bấm **Phân tích hotspot** ở cột bên trái.")
-    # Khong dung .to_markdown() — can them `tabulate`, va app phai chay duoc
-    # ngay sau `pip install -r requirements.txt`.
-    df_all = cached_load(dataset)
-    per_day = (
-        df_all.groupby("weekday")
-        .size()
-        .reindex(range(7), fill_value=0)
-        .rename(index=dict(weekday_options()))
-        .rename("So chuyen")
-        .to_frame()
-        .T
+    st.caption(
+        "Noise chỉ có nghĩa là chưa đủ mật độ theo truy vấn và tham số hiện tại. "
+        "App không tự điều chỉnh tham số để tạo kết quả đẹp."
     )
-    st.markdown(f"**Tổng quan dataset** — {len(df_all):,} điểm đón hợp lệ.")
-    st.dataframe(per_day, use_container_width=True)
+
+start_minute, window_minutes = time_window(start_time, end_time)
+geometry_json = st.session_state.get("drawn_geometry_json")
+
+if spatial_mode == "Vẽ một vùng":
+    st.subheader("Vẽ đúng một vùng cần phân tích")
+    st.write(
+        "Dùng công cụ rectangle hoặc polygon ở góc trái bản đồ. "
+        "Nếu vẽ hình mới, hình mới sẽ thay thế vùng trước đó."
+    )
+    current_selection = (
+        SpatialSelection(geometry_json=geometry_json) if geometry_json else None
+    )
+    map_points = cached_global_sample()
+    custom_preview = None
+    if current_selection is not None and weekdays:
+        try:
+            custom_preview = cached_preview(
+                None,
+                geometry_json,
+                weekdays,
+                start_minute,
+                window_minutes,
+            )
+            map_points = custom_preview.points
+        except ValueError:
+            pass
+    center, zoom = (
+        area_view(current_selection)
+        if current_selection is not None
+        else ((40.7128, -74.0060), 10)
+    )
+    map_state = st_folium(
+        build_raw_map(
+            map_points,
+            center=center,
+            zoom=zoom,
+            total_points=(custom_preview.total_points if custom_preview else None),
+            selection=current_selection,
+            allow_draw=True,
+        ),
+        height=520,
+        use_container_width=True,
+        key=f"draw-region-map-{st.session_state.get('draw_revision', 0)}",
+        returned_objects=["all_drawings", "last_active_drawing"],
+    )
+    geometry = drawing_geometry(map_state)
+    if geometry is not None:
+        try:
+            new_selection = SpatialSelection.for_geometry(geometry)
+        except ValueError as exc:
+            st.warning(str(exc))
+        else:
+            geometry_json = new_selection.geometry_json
+            if geometry_json != st.session_state.get("drawn_geometry_json"):
+                st.session_state["drawn_geometry_json"] = geometry_json
+                st.session_state["draw_revision"] = (
+                    st.session_state.get("draw_revision", 0) + 1
+                )
+                st.rerun()
+    if geometry_json and st.button("Xóa vùng đã vẽ"):
+        st.session_state.pop("drawn_geometry_json", None)
+        st.session_state["draw_revision"] = st.session_state.get("draw_revision", 0) + 1
+        st.rerun()
+else:
+    selection = SpatialSelection.for_borough(selected_borough)
+    center, zoom = area_view(selection)
+    borough_preview = None
+    if weekdays:
+        try:
+            borough_preview = cached_preview(
+                selected_borough,
+                None,
+                weekdays,
+                start_minute,
+                window_minutes,
+            )
+        except ValueError as exc:
+            st.warning(str(exc))
+    st.subheader(
+        f"Pickup thô · {selected_borough} · {window_label(start_minute, window_minutes)}"
+    )
+    st_folium(
+        build_raw_map(
+            borough_preview.points if borough_preview else pd.DataFrame(),
+            center=center,
+            zoom=zoom,
+            total_points=(borough_preview.total_points if borough_preview else None),
+        ),
+        height=520,
+        use_container_width=True,
+        key="borough-preview-map",
+        returned_objects=[],
+    )
+
+selection = None
+if spatial_mode == "Theo borough":
+    selection = SpatialSelection.for_borough(selected_borough)
+elif geometry_json:
+    try:
+        selection = SpatialSelection(geometry_json=geometry_json)
+    except ValueError as exc:
+        st.warning(str(exc))
+
+preview = None
+if selection is not None and weekdays:
+    try:
+        preview = cached_preview(
+            selection.borough,
+            selection.geometry_json,
+            weekdays,
+            start_minute,
+            window_minutes,
+        )
+    except ValueError as exc:
+        st.warning(str(exc))
+
+if not weekdays:
+    st.warning("Chọn ít nhất một ngày trong tuần.")
+elif selection is None:
+    st.info("Vẽ một rectangle hoặc polygon để xác định phạm vi phân tích.")
+elif preview is not None:
+    st.write(
+        f"Truy vấn hiện tại có **{preview.total_points:,} pickup** trên "
+        f"**{preview.available_matching_dates} ngày phù hợp**."
+    )
+    if preview.total_points > MAX_ANALYSIS_POINTS:
+        st.warning(
+            f"Vượt ngưỡng chạy tương tác {MAX_ANALYSIS_POINTS:,} pickup. "
+            "Hãy thu hẹp khu vực, ngày hoặc khung giờ; app không lấy mẫu âm thầm."
+        )
+    elif preview.total_points == 0:
+        st.warning("Không có pickup nào khớp truy vấn hiện tại.")
+
+can_analyze = bool(
+    selection is not None
+    and weekdays
+    and preview is not None
+    and 0 < preview.total_points <= MAX_ANALYSIS_POINTS
+)
+analyze_clicked = st.button(
+    "Tìm vùng ưu tiên",
+    type="primary",
+    disabled=not can_analyze,
+    use_container_width=True,
+)
+
+current_query = None
+if selection is not None:
+    current_query = {
+        "borough": selection.borough,
+        "geometry_json": selection.geometry_json,
+        "weekdays": weekdays,
+        "start_minute": start_minute,
+        "window_minutes": window_minutes,
+        "eps_m": eps_m,
+        "min_samples": min_samples,
+    }
+if analyze_clicked:
+    st.session_state["hotspot_query"] = current_query
+
+saved_query = st.session_state.get("hotspot_query")
+if saved_query is None:
+    st.info("Chọn ngữ cảnh rồi bấm **Tìm vùng ưu tiên** để chạy DBSCAN.")
     st.stop()
 
-# --------------------------------------------------------------------------- #
-# Chay phan tich
-# --------------------------------------------------------------------------- #
-if not days:
-    st.warning("Chọn ít nhất một ngày trong tuần.")
-    st.stop()
+if saved_query != current_query:
+    st.info(
+        "Bộ lọc đã thay đổi. Kết quả bên dưới vẫn thuộc lần phân tích gần nhất; "
+        "bấm **Tìm vùng ưu tiên** để cập nhật."
+    )
 
 try:
-    df, result = cached_dbscan(dataset, tuple(sorted(days)), h0, h1, eps_m, min_samples)
+    analysis = cached_analysis(**saved_query)
+except QueryTooLargeError as exc:
+    st.warning(str(exc))
+    st.stop()
 except ValueError as exc:
     st.warning(str(exc))
     st.stop()
 
-metrics = page_metrics(df, result)
-
-tab_map, tab_kde, tab_table = st.tabs(["Cụm DBSCAN", "Mật độ KDE", "Bảng số liệu"])
-
-with tab_map:
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Điểm đón", f"{metrics['filtered_pickups']:,}")
-    c2.metric("Số cụm", metrics["number_of_clusters"])
-    c3.metric("Nhiễu", f"{metrics['noise_count']:,}")
-    c4.metric("Tỉ lệ nhiễu", f"{metrics['noise_percentage']}%")
-    c5.metric("Thời gian chạy", f"{metrics['analysis_runtime_seconds']}s")
-
-    if metrics["sampled"]:
-        st.caption(
-            f"⚠️ Số điểm lớn nên đã lấy mẫu ngẫu nhiên còn "
-            f"{metrics['filtered_pickups']:,} điểm để giữ app phản hồi nhanh."
-        )
-
-    st.subheader(f"Bản đồ — {h0:02d}:00–{h1:02d}:00")
-    lat_c, lon_c, zoom_c = REGION_CENTER.get(dataset, REGION_CENTER["full"])
-    st_folium(
-        build_dbscan_map(
-            df,
-            result,
-            center=(lat_c, lon_c),
-            zoom=zoom_c,
-            max_raw_points=MAX_RAW_POINTS,
-            max_noise_points=MAX_NOISE_POINTS,
-            max_points_per_cluster=MAX_POINTS_PER_CLUSTER,
-        ),
-        height=620,
-        use_container_width=True,
-    )
-    st.caption(
-        "Chấm xám mảnh = điểm đón thô · chấm màu = cụm · cờ = trọng tâm cụm · "
-        "xám đậm trong cụm riêng = nhiễu. Số trên cụm là số điểm **thật**, "
-        "dù điểm vẽ trên bản đồ chỉ là mẫu để bản đồ không bị treo."
-    )
-
-with tab_kde:
-    st.info(
-        "KDE hiển thị **mật độ liên tục**; DBSCAN tạo **cụm rời rạc và nhiễu**. "
-        "Cùng bộ điểm, hai cách trả lời hai câu hỏi khác nhau."
-    )
-    try:
-        _, kde = cached_kde(dataset, tuple(sorted(days)), h0, h1, bandwidth_m)
-    except ValueError as exc:
-        st.warning(str(exc))
-    else:
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Bandwidth", f"{kde.bandwidth_m:.0f} m")
-        m2.metric("Mật độ đỉnh", f"{kde.peak_density:.2e}")
-        m3.metric("Số điểm ước lượng", f"{len(kde.coords_m):,}")
-        st_folium(
-            build_kde_map(df, kde, hot_pct=hot_pct),
-            height=620,
-            use_container_width=True,
-        )
-
-with tab_table:
-    table = cluster_table(df, result)
-    if table.empty:
-        st.warning("Không tìm thấy cụm nào — giảm `eps` hoặc giảm `MinPts`.")
-    else:
-        st.subheader("Top hotspot theo số chuyến đón")
-        show = table.head(10).copy()
-        show["centroid_latitude"] = show["centroid_latitude"].round(5)
-        show["centroid_longitude"] = show["centroid_longitude"].round(5)
-        for col in ("area_km2", "pickup_per_km2"):
-            if col in show.columns:
-                show[col] = show[col].round(3)
-        st.dataframe(
-            show,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "rank": "Hạng",
-                "cluster_id": "Cụm",
-                "pickup_count": "Số chuyến",
-                "centroid_latitude": "Vĩ độ",
-                "centroid_longitude": "Kinh độ",
-                "area_km2": "Diện tích (km²)",
-                "pickup_per_km2": "Chuyến/km²",
-            },
-        )
-        st.caption(
-            "Diện tích ước lượng bằng **bao lồi** để tính mật độ — chỉ dùng để **so sánh**, "
-            "không phải ranh giới thật của cụm. Ranh giới DBSCAN không phải hình học nào."
-        )
-        if metrics["pickups_per_hour"]:
-            st.caption(
-                f"Khoảng đang xem ≈ {metrics['window_hours']:.0f} giờ × "
-                f"{len(days)} ngày → trung bình {metrics['pickups_per_hour']:,.0f} chuyến/giờ."
-            )
-
-with st.expander("Thông số đang dùng"):
-    st.json(
-        {
-            "dataset": DATASETS[dataset]["label"],
-            "ngay_trong_tuan": [weekday_options()[d][1] for d in sorted(days)],
-            "khoang_gio": f"{h0:02d}:00-{h1:02d}:00",
-"eps_m": eps_m,
-                "min_samples": min_samples,
-                "point_cap_dbscan": POINT_CAP_DBSCAN,
-                "point_cap_kde": POINT_CAP_KDE,
-                **metrics,
-        }
-    )
+day_text = ", ".join(DAY_LABELS[day] for day in analysis.weekday_selection)
+st.markdown(
+    f"### {analysis.spatial_selection.label} · {day_text} · "
+    f"{window_label(analysis.start_minute, analysis.window_minutes)} · "
+    f"eps {analysis.eps_m:.0f}m · MinPts {analysis.min_samples}"
+)
+render_analysis(analysis)

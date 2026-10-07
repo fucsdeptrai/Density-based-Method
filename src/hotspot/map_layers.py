@@ -10,11 +10,15 @@ ve vong tron hay convex hull se doc sai nghiep vu. Chi ve:
 
 from __future__ import annotations
 
+import json
+
+import folium
 import numpy as np
 import pandas as pd
-import folium
+from folium.plugins import Draw
 
-from .dbscan import DBSCANResult
+from .dbscan import DBSCANResult, HotspotAnalysis
+from .filters import SpatialSelection
 from .kde import KDEResult
 
 DEFAULT_CENTER = (40.739, -73.974)  # trung tam kich thuoc du lieu
@@ -50,6 +54,172 @@ def _fit_bounds(points: np.ndarray | None, fallback: tuple[float, float]) -> tup
     if points is None or len(points) == 0:
         return fallback
     return (float(points[:, 0].mean()), float(points[:, 1].mean()))
+
+
+def _sample_positions(size: int, limit: int, seed: int) -> np.ndarray:
+    if size <= limit:
+        return np.arange(size)
+    return np.sort(np.random.default_rng(seed).choice(size, limit, replace=False))
+
+
+def _add_selection_overlay(m: folium.Map, selection: SpatialSelection | None) -> None:
+    if selection is None or selection.geometry_json is None:
+        return
+    folium.GeoJson(
+        json.loads(selection.geometry_json),
+        name="Pham vi nguoi dung chon",
+        style_function=lambda _: {
+            "color": "#2563eb",
+            "weight": 3,
+            "fillColor": "#60a5fa",
+            "fillOpacity": 0.08,
+            "dashArray": "7,5",
+        },
+        tooltip="Pham vi loc do nguoi dung ve — khong phai ranh gioi DBSCAN",
+    ).add_to(m)
+
+
+def _fit_custom_selection(m: folium.Map, selection: SpatialSelection | None) -> None:
+    if selection is None or selection.geometry_json is None:
+        return
+    min_lon, min_lat, max_lon, max_lat = selection.geometry.bounds
+    m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=(20, 20))
+
+
+def build_raw_map(
+    points: pd.DataFrame,
+    *,
+    center: tuple[float, float] = DEFAULT_CENTER,
+    zoom: int = DEFAULT_ZOOM,
+    max_points: int = 1_500,
+    total_points: int | None = None,
+    selection: SpatialSelection | None = None,
+    allow_draw: bool = False,
+) -> folium.Map:
+    """Ban do diem tho truoc khi nguoi dung yeu cau phan tich."""
+    m = _base_map(center, zoom)
+    shown = _sample_positions(len(points), max_points, seed=0)
+    for row in points.iloc[shown].itertuples():
+        folium.CircleMarker(
+            location=[row.latitude, row.longitude],
+            radius=2,
+            color=None,
+            weight=0,
+            fill=True,
+            fill_color="#4b5563",
+            fill_opacity=0.25,
+        ).add_to(m)
+    _add_selection_overlay(m, selection)
+    _fit_custom_selection(m, selection)
+    if allow_draw:
+        Draw(
+            export=False,
+            draw_options={
+                "polyline": False,
+                "circle": False,
+                "circlemarker": False,
+                "marker": False,
+                "polygon": {"allowIntersection": False},
+                "rectangle": True,
+            },
+            edit_options={"edit": True, "remove": True},
+        ).add_to(m)
+    if total_points is None:
+        count_text = f"hien thi <b>{len(shown):,}</b> diem tham khao"
+    else:
+        count_text = f"hien thi <b>{len(shown):,}/{total_points:,}</b>"
+    legend = (
+        f"Diem pickup tho: {count_text}. Bam <b>Tim vung uu tien</b> de chuyen "
+        "dam may diem thanh danh sach ngan."
+    )
+    m.get_root().html.add_child(folium.Element(f"<p style='font-size:12px'>{legend}</p>"))
+    return m
+
+
+def build_hotspot_map(
+    analysis: HotspotAnalysis,
+    *,
+    center: tuple[float, float] = DEFAULT_CENTER,
+    zoom: int = DEFAULT_ZOOM,
+    max_raw_points: int = 1_000,
+    max_noise_points: int = 1_000,
+    max_points_per_cluster: int = 250,
+) -> folium.Map:
+    """Ban do quyet dinh: diem tho, cum, noise va marker Top 3."""
+    points = analysis.points
+    m = _base_map(center, zoom)
+    _add_selection_overlay(m, analysis.spatial_selection)
+    _fit_custom_selection(m, analysis.spatial_selection)
+
+    raw_positions = _sample_positions(len(points), max_raw_points, seed=0)
+    for row in points.iloc[raw_positions].itertuples():
+        folium.CircleMarker(
+            location=[row.latitude, row.longitude],
+            radius=1.5,
+            color=None,
+            weight=0,
+            fill=True,
+            fill_color="#4b5563",
+            fill_opacity=0.15,
+        ).add_to(m)
+
+    noise = points[points["cluster_id"] == -1]
+    noise_positions = _sample_positions(len(noise), max_noise_points, seed=1)
+    for row in noise.iloc[noise_positions].itertuples():
+        folium.CircleMarker(
+            location=[row.latitude, row.longitude],
+            radius=2,
+            color=None,
+            weight=0,
+            fill=True,
+            fill_color="#808080",
+            fill_opacity=0.55,
+            tooltip="Noise: chua du mat do theo cau hinh nay",
+        ).add_to(m)
+
+    clustered = points[points["cluster_id"] != -1]
+    for cluster_id, group in clustered.groupby("cluster_id", sort=True):
+        color = cluster_color(int(cluster_id))
+        positions = _sample_positions(
+            len(group), max_points_per_cluster, seed=int(cluster_id) + 2
+        )
+        for row in group.iloc[positions].itertuples():
+            folium.CircleMarker(
+                location=[row.latitude, row.longitude],
+                radius=2.5,
+                color=color,
+                weight=0,
+                fill=True,
+                fill_color=color,
+                fill_opacity=0.85,
+                tooltip=f"Cum {int(cluster_id)}",
+            ).add_to(m)
+
+    for row in analysis.top_zones.itertuples():
+        evidence = (
+            f"Hotspot {row.rank}: {row.pickup_count:,} pickup lich su; "
+            f"xuat hien {row.support_dates}/{row.available_matching_dates} ngay phu hop"
+        )
+        folium.Marker(
+            location=[row.centroid_latitude, row.centroid_longitude],
+            icon=folium.DivIcon(
+                html=(
+                    "<div style='background:#111827;color:white;border:2px solid white;"
+                    "border-radius:50%;width:28px;height:28px;line-height:24px;"
+                    f"text-align:center;font-weight:700'>{int(row.rank)}</div>"
+                )
+            ),
+            tooltip=evidence,
+        ).add_to(m)
+
+    legend = (
+        f"<b>{analysis.n_clusters}</b> hotspot lich su | "
+        f"noise <b>{analysis.noise_percentage:.1f}%</b> | "
+        f"eps=<b>{analysis.eps_m:.0f}m</b> | MinPts=<b>{analysis.min_samples}</b>. "
+        "So lieu xep hang dung toan bo diem; ban do chi lay mau de hien thi."
+    )
+    m.get_root().html.add_child(folium.Element(f"<p style='font-size:12px'>{legend}</p>"))
+    return m
 
 
 def build_dbscan_map(
