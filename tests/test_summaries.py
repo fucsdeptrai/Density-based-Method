@@ -174,4 +174,28 @@ def test_recurring_summary_empty_result_has_stable_schema():
         "pickups_per_matching_date",
         "centroid_latitude",
         "centroid_longitude",
+        "marker_latitude",
+        "marker_longitude",
     ]
+
+
+def test_summary_places_marker_in_densest_cell_not_at_cluster_centroid():
+    labeled = pd.DataFrame(
+        {
+            "cluster_id": [0] * 6,
+            "date": ["2024-01-05"] * 6,
+            "x_m": [0.0, 5.0, 10.0, 15.0, 1_000.0, 1_010.0],
+            "y_m": [0.0] * 6,
+            "latitude": [40.7000, 40.7001, 40.7002, 40.7003, 40.7100, 40.7101],
+            "longitude": [-73.9000, -73.9001, -73.9002, -73.9003, -73.9100, -73.9101],
+        }
+    )
+
+    table = summarize_hotspots(
+        labeled,
+        available_matching_dates=1,
+        marker_cell_m=100,
+    )
+
+    assert table.iloc[0]["marker_latitude"] < 40.701
+    assert table.iloc[0]["marker_longitude"] > -73.901

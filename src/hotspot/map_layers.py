@@ -144,6 +144,7 @@ def build_hotspot_map(
     max_raw_points: int = 1_000,
     max_noise_points: int = 1_000,
     max_points_per_cluster: int = 250,
+    max_other_cluster_points: int = 500,
 ) -> folium.Map:
     """Ban do quyet dinh: diem tho, cum, noise va marker Top 3."""
     points = analysis.points
@@ -178,7 +179,25 @@ def build_hotspot_map(
         ).add_to(m)
 
     clustered = points[points["cluster_id"] != -1]
-    for cluster_id, group in clustered.groupby("cluster_id", sort=True):
+    top_cluster_ids = set(analysis.top_zones["cluster_id"].astype(int))
+    other_clusters = clustered[~clustered["cluster_id"].isin(top_cluster_ids)]
+    other_positions = _sample_positions(
+        len(other_clusters), max_other_cluster_points, seed=2
+    )
+    for row in other_clusters.iloc[other_positions].itertuples():
+        folium.CircleMarker(
+            location=[row.latitude, row.longitude],
+            radius=2,
+            color=None,
+            weight=0,
+            fill=True,
+            fill_color="#64748b",
+            fill_opacity=0.3,
+            tooltip="Hotspot ngoài Top 3",
+        ).add_to(m)
+
+    top_points = clustered[clustered["cluster_id"].isin(top_cluster_ids)]
+    for cluster_id, group in top_points.groupby("cluster_id", sort=True):
         color = cluster_color(int(cluster_id))
         positions = _sample_positions(
             len(group), max_points_per_cluster, seed=int(cluster_id) + 2
@@ -201,7 +220,7 @@ def build_hotspot_map(
             f"xuat hien {row.support_dates}/{row.available_matching_dates} ngay phu hop"
         )
         folium.Marker(
-            location=[row.centroid_latitude, row.centroid_longitude],
+            location=[row.marker_latitude, row.marker_longitude],
             icon=folium.DivIcon(
                 html=(
                     "<div style='background:#111827;color:white;border:2px solid white;"
@@ -216,6 +235,7 @@ def build_hotspot_map(
         f"<b>{analysis.n_clusters}</b> hotspot lich su | "
         f"noise <b>{analysis.noise_percentage:.1f}%</b> | "
         f"eps=<b>{analysis.eps_m:.0f}m</b> | MinPts=<b>{analysis.min_samples}</b>. "
+        "Chi Top 3 duoc to mau; cac cum con lai duoc lam mo. "
         "So lieu xep hang dung toan bo diem; ban do chi lay mau de hien thi."
     )
     m.get_root().html.add_child(folium.Element(f"<p style='font-size:12px'>{legend}</p>"))

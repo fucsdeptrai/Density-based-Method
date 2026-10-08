@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import DBSCAN
 
-from .filters import SpatialSelection, filter_context
+from .filters import SpatialSelection, filter_context, matching_dates_for_context
 from .summaries import summarize_hotspots
 
 # Gia tri ngoai dai cua DBSCAN cho diem nhieu
@@ -65,6 +65,7 @@ class HotspotAnalysis:
     start_minute: int
     window_minutes: int
     available_matching_dates: int
+    matching_dates: tuple[str, ...]
     eps_m: float
     min_samples: int
     runtime_seconds: float
@@ -174,6 +175,7 @@ def analyze_hotspots(
     spatial_selection: SpatialSelection | None = None,
     start_minute: int | None = None,
     max_points: int | None = 200_000,
+    max_matching_dates: int | None = None,
 ) -> HotspotAnalysis:
     """Loc ngu canh, chay DBSCAN va tao bang uu tien co recurrence."""
     if weekday_selection is None:
@@ -192,13 +194,19 @@ def analyze_hotspots(
         start_minute=resolved_start,
         window_minutes=window_minutes,
         max_points=max_points,
+        max_matching_dates=max_matching_dates,
     )
     if filtered.empty:
         raise ValueError("Khong co pickup nao khop khu vuc va khung gio da chon")
 
     result = run_dbscan(filtered, eps_m=eps_m, min_samples=min_samples)
     points = filtered.assign(cluster_id=result.labels)
-    zones = summarize_hotspots(points, available_dates)
+    zones = summarize_hotspots(points, available_dates, marker_cell_m=eps_m)
+    matching_dates = matching_dates_for_context(
+        pickups,
+        weekday_selection,
+        max_matching_dates=max_matching_dates,
+    )
     return HotspotAnalysis(
         points=points,
         zones=zones,
@@ -207,6 +215,7 @@ def analyze_hotspots(
         start_minute=resolved_start,
         window_minutes=window_minutes,
         available_matching_dates=available_dates,
+        matching_dates=matching_dates,
         eps_m=float(eps_m),
         min_samples=int(min_samples),
         runtime_seconds=result.runtime_seconds,

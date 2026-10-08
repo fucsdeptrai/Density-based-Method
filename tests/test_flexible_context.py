@@ -142,6 +142,47 @@ def test_preview_counts_all_points_but_returns_only_sample():
     assert len(preview.points) == 3
 
 
+def test_context_can_limit_to_five_latest_matching_dates():
+    pickups = make_frame(
+        [
+            (f"2024-{month_day} 18:15", 40.68, -73.94, "Brooklyn")
+            for month_day in (
+                "01-05",
+                "01-12",
+                "01-19",
+                "01-26",
+                "02-02",
+                "02-09",
+                "02-16",
+            )
+        ]
+    )
+
+    preview = preview_context(
+        pickups,
+        spatial_selection=SpatialSelection.for_borough("Brooklyn"),
+        weekday_selection=["Friday"],
+        start_minute=18 * 60,
+        window_minutes=60,
+        max_matching_dates=5,
+    )
+    filtered, available_dates = filter_context(
+        pickups,
+        spatial_selection=SpatialSelection.for_borough("Brooklyn"),
+        weekday_selection=["Friday"],
+        start_minute=18 * 60,
+        window_minutes=60,
+        max_matching_dates=5,
+    )
+
+    expected = ["2024-01-19", "2024-01-26", "2024-02-02", "2024-02-09", "2024-02-16"]
+    assert preview.matching_dates == tuple(expected)
+    assert preview.available_matching_dates == 5
+    assert preview.total_points == 5
+    assert available_dates == 5
+    assert filtered["context_date"].astype(str).tolist() == expected
+
+
 def test_analysis_rejects_query_above_exact_limit():
     pickups = make_frame(
         [(f"2024-01-05 18:{minute:02d}", 40.68, -73.94, "Brooklyn") for minute in range(4)]

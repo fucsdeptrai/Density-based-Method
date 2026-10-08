@@ -59,7 +59,7 @@ Do not hard-code this exact scenario if the available preprocessed file uses a d
 ### User flow
 
 1. User selects one borough or draws one region, then chooses weekdays and a time window in 15-minute steps.
-2. The app pools historical pickup events that match the selected context.
+2. The user chooses 1–30 matching dates (default 5); the app pools the most recent historical dates that match the selected context and lists them explicitly.
 3. The user sees the raw pickup map and understands why raw points are not actionable.
 4. User clicks **Find priority zones**.
 5. DBSCAN runs on the filtered points and displays clusters, noise and a Top 3 ranked zone list.
@@ -79,6 +79,8 @@ available_matching_dates        # denominator for the query context
 pickups_per_matching_date       # pickup_count / available_matching_dates
 centroid_latitude
 centroid_longitude
+marker_latitude                 # pickup inside the densest eps-sized cell
+marker_longitude
 ```
 
 The app may rank zones primarily by:
@@ -175,9 +177,10 @@ Build a single local Streamlit app. Do not build a REST API, database, login sys
 The map is the dominant view. Render:
 
 - raw pickup events as small, low-opacity dots;
-- DBSCAN cluster events in distinguishable colors;
+- Top 3 DBSCAN cluster events in distinguishable colors;
+- remaining cluster events in muted gray;
 - noise in muted gray;
-- a labeled centroid marker for each Top 3 cluster.
+- a labeled marker inside the densest eps-sized cell of each Top 3 cluster.
 
 Do not draw a circle, convex hull or polygon and call it the DBSCAN boundary. A future geographic region layer may be added only if it is explicitly labeled as post-processing.
 

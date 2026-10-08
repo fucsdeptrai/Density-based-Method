@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from hotspot import analyze_hotspots
+from hotspot.map_layers import build_hotspot_map
 
 
 def make_pickups() -> pd.DataFrame:
@@ -100,3 +101,41 @@ def test_invalid_or_empty_context_has_clear_error():
             eps_m=30,
             min_samples=2,
         )
+
+
+def test_result_map_only_highlights_top_three_clusters():
+    rows = []
+    for cluster_index in range(4):
+        for offset in range(3):
+            rows.append(
+                {
+                    "pickup_datetime": pd.Timestamp(f"2024-01-05 18:0{offset}:00"),
+                    "latitude": 40.68 + cluster_index * 0.01,
+                    "longitude": -73.94,
+                    "x_m": cluster_index * 500 + offset,
+                    "y_m": float(offset),
+                    "area": "Brooklyn",
+                }
+            )
+    analysis = analyze_hotspots(
+        pd.DataFrame(rows),
+        area="Brooklyn",
+        weekday_selection=["Friday"],
+        start_hour=18,
+        window_minutes=60,
+        eps_m=30,
+        min_samples=2,
+    )
+
+    html = build_hotspot_map(
+        analysis,
+        max_raw_points=0,
+        max_noise_points=0,
+        max_points_per_cluster=10,
+    ).get_root().render()
+
+    for cluster_id in analysis.top_zones["cluster_id"]:
+        cluster_id = int(cluster_id)
+        assert f"Cum {cluster_id}" in html
+    hidden_cluster = int(analysis.zones.iloc[3]["cluster_id"])
+    assert f"Cum {hidden_cluster}" not in html

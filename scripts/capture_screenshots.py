@@ -33,6 +33,12 @@ def capture(page, filename: str) -> None:
     print(f"luu {path}")
 
 
+def capture_result(page, filename: str) -> None:
+    page.get_by_text("Top 3 vùng ưu tiên", exact=True).scroll_into_view_if_needed()
+    time.sleep(2)
+    capture(page, filename)
+
+
 def draw_rectangle(page) -> None:
     iframe = page.locator("iframe.stCustomComponentV1").first
     iframe.wait_for(state="visible", timeout=120_000)
@@ -61,7 +67,7 @@ def run() -> None:
         page.click("button:has-text('Tìm vùng ưu tiên')")
         page.wait_for_selector("text=Top 3 vùng ưu tiên", timeout=120_000)
         wait_for_map(page)
-        capture(page, "02_borough_result.png")
+        capture_result(page, "02_borough_result.png")
 
         page.get_by_text("Vẽ một vùng", exact=True).click()
         wait_for_map(page)
@@ -70,7 +76,7 @@ def run() -> None:
         page.click("button:has-text('Tìm vùng ưu tiên')")
         page.wait_for_selector("text=Top 3 vùng ưu tiên", timeout=120_000)
         wait_for_map(page, seconds=12)
-        capture(page, "03_custom_region_result.png")
+        capture_result(page, "03_custom_region_result.png")
         browser.close()
 
 

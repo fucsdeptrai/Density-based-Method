@@ -22,12 +22,15 @@ HOTSPOT_COLUMNS = {
     "pickups_per_matching_date": "float64",
     "centroid_latitude": "float64",
     "centroid_longitude": "float64",
+    "marker_latitude": "float64",
+    "marker_longitude": "float64",
 }
 
 
 def summarize_hotspots(
     labeled_points: pd.DataFrame,
     available_matching_dates: int,
+    marker_cell_m: float | None = None,
 ) -> pd.DataFrame:
     """Xep hang cum bang do lap lai theo ngay, roi moi den tong pickup."""
     clustered = labeled_points[labeled_points["cluster_id"] != -1]
@@ -51,6 +54,22 @@ def summarize_hotspots(
     table["pickups_per_matching_date"] = (
         table["pickup_count"] / available_matching_dates
     )
+    if marker_cell_m is None:
+        table["marker_latitude"] = table["centroid_latitude"]
+        table["marker_longitude"] = table["centroid_longitude"]
+    else:
+        if marker_cell_m <= 0:
+            raise ValueError("Kich thuoc o marker phai lon hon 0")
+        markers = {
+            int(cluster_id): _densest_cell_marker(group, marker_cell_m)
+            for cluster_id, group in clustered.groupby("cluster_id", sort=True)
+        }
+        table["marker_latitude"] = table["cluster_id"].map(
+            lambda cluster_id: markers[int(cluster_id)][0]
+        )
+        table["marker_longitude"] = table["cluster_id"].map(
+            lambda cluster_id: markers[int(cluster_id)][1]
+        )
     table = table.sort_values(
         ["support_dates", "pickups_per_matching_date", "pickup_count"],
         ascending=False,
@@ -58,6 +77,27 @@ def summarize_hotspots(
     ).reset_index(drop=True)
     table.insert(0, "rank", range(1, len(table) + 1))
     return table[list(HOTSPOT_COLUMNS)]
+
+
+def _densest_cell_marker(group: pd.DataFrame, cell_m: float) -> tuple[float, float]:
+    """Chon pickup gan tam cua o eps day nhat trong mot cum."""
+    cells = pd.DataFrame(
+        {
+            "cell_x": np.floor(group["x_m"].to_numpy(dtype="float64") / cell_m),
+            "cell_y": np.floor(group["y_m"].to_numpy(dtype="float64") / cell_m),
+        },
+        index=group.index,
+    )
+    densest_cell = cells.value_counts(sort=True).index[0]
+    dense = group.loc[
+        cells["cell_x"].eq(densest_cell[0])
+        & cells["cell_y"].eq(densest_cell[1])
+    ]
+    center_x = dense["x_m"].mean()
+    center_y = dense["y_m"].mean()
+    distances = (dense["x_m"] - center_x) ** 2 + (dense["y_m"] - center_y) ** 2
+    marker = dense.loc[distances.idxmin()]
+    return float(marker["latitude"]), float(marker["longitude"])
 
 
 def _convex_hull_area_m2(x: np.ndarray, y: np.ndarray) -> float:

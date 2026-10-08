@@ -26,8 +26,9 @@ Người dùng tạo một truy vấn duy nhất:
 1. Chọn một borough, hoặc vẽ một rectangle/polygon trên bản đồ.
 2. Chọn tùy ý các thứ trong tuần.
 3. Chọn giờ bắt đầu và kết thúc theo bước 15 phút. Khoảng giờ có thể đi qua nửa đêm; hai giờ giống nhau nghĩa là đủ 24 giờ.
-4. Điều chỉnh `eps` và `MinPts` nếu cần, rồi bấm **Tìm vùng ưu tiên**.
-5. Đọc số pickup, số hotspot, tỷ lệ noise và bằng chứng recurrence của Top 3.
+4. Chọn số ngày phù hợp gần nhất cần gộp (1–30 ngày, mặc định 5); app liệt kê chính xác các ngày được dùng.
+5. Điều chỉnh `eps` và `MinPts` nếu cần, rồi bấm **Tìm vùng ưu tiên**.
+6. Đọc số pickup, số hotspot, tỷ lệ noise và bằng chứng recurrence của Top 3.
 
 Mặc định là Brooklyn, Thứ Sáu, 18:00–19:00, `eps=70m`, `MinPts=15`. Đây chỉ là điểm bắt đầu có thể thay đổi hoàn toàn, không phải cấu hình tối ưu chung.
 
@@ -41,7 +42,7 @@ một borough hoặc một polygon
                     ↓
        DBSCAN trên (x_m, y_m)
                     ↓
-tổng hợp pickup + ngày hỗ trợ + trọng tâm
+tổng hợp pickup + ngày hỗ trợ + ô mật độ cao nhất
                     ↓
 xếp hạng theo ngày hỗ trợ, pickup/ngày, tổng pickup
 ```
@@ -49,6 +50,8 @@ xếp hạng theo ngày hỗ trợ, pickup/ngày, tổng pickup
 - Polygon chỉ là phạm vi lọc do người dùng vẽ, không phải ranh giới DBSCAN.
 - DBSCAN chỉ nhận `x_m`, `y_m` đã chiếu sang mét; không chạy `eps` theo mét trên kinh/vĩ độ và không z-score tọa độ.
 - Với cửa sổ qua đêm, pickup sau 00:00 được tính cho ngày bắt đầu của ngữ cảnh.
+- Người dùng chọn từ 1–30 ngày phù hợp gần nhất; mặc định 5 ngày để giảm density chaining do tích lũy cả sáu tháng.
+- Bản đồ chỉ tô nổi Top 3; các cụm khác vẫn được tính nhưng hiển thị mờ.
 - Noise nghĩa là pickup chưa thuộc vùng đủ dày trong truy vấn hiện tại, không có nghĩa là không có nhu cầu.
 
 Logic chính độc lập với Streamlit:
@@ -80,7 +83,7 @@ python3 scripts/capture_screenshots.py
 
 - Dữ liệu chỉ bao phủ 04/2014–09/2014 và phản ánh pickup đã quan sát, không phản ánh cung xe hay nhu cầu không được phục vụ.
 - Số ngày hỗ trợ là bằng chứng recurrence sau khi phân cụm, không phải confidence score.
-- DBSCAN không tạo polygon hay ranh giới bám đường phố. Marker centroid cũng không phải một điểm chờ chính xác.
+- DBSCAN không tạo polygon hay ranh giới bám đường phố. Marker là một pickup trong ô `eps` dày nhất, không phải một điểm chờ chính xác.
 - Kết quả nhạy với `eps`, `MinPts`, phạm vi và mật độ dữ liệu; app cảnh báo nếu một cụm chứa hơn 50% pickup.
 
 Các notebook, hình và script thử nghiệm cũ chỉ là chẩn đoán offline, không thuộc workflow chính của ứng dụng.

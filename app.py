@@ -29,6 +29,8 @@ DEFAULT_AREA = "Brooklyn"
 DEFAULT_EPS_M = 70
 DEFAULT_MIN_SAMPLES = 15
 MAX_ANALYSIS_POINTS = 200_000
+DEFAULT_MATCHING_DATES = 5
+MAX_SELECTABLE_DATES = 30
 
 DAY_LABELS = {
     "Monday": "Thứ Hai",
@@ -74,6 +76,7 @@ def cached_preview(
     borough: str | None,
     geometry_json: str | None,
     weekdays: tuple[str, ...],
+    max_matching_dates: int,
     start_minute: int,
     window_minutes: int,
 ):
@@ -83,6 +86,7 @@ def cached_preview(
         weekday_selection=weekdays,
         start_minute=start_minute,
         window_minutes=window_minutes,
+        max_matching_dates=max_matching_dates,
     )
 
 
@@ -91,6 +95,7 @@ def cached_analysis(
     borough: str | None,
     geometry_json: str | None,
     weekdays: tuple[str, ...],
+    max_matching_dates: int,
     start_minute: int,
     window_minutes: int,
     eps_m: int,
@@ -105,6 +110,7 @@ def cached_analysis(
         eps_m=eps_m,
         min_samples=min_samples,
         max_points=MAX_ANALYSIS_POINTS,
+        max_matching_dates=max_matching_dates,
     )
 
 
@@ -200,8 +206,9 @@ def render_analysis(analysis: HotspotAnalysis) -> None:
             returned_objects=[],
         )
         st.caption(
-            "Chấm màu là pickup thuộc hotspot; chấm xám là noise. Marker 1–3 là "
-            "trọng tâm Top 3, không phải ranh giới DBSCAN. Đường xanh đứt nét, nếu có, "
+            "Chấm màu là pickup thuộc Top 3 hotspot; các cụm còn lại và noise được làm mờ. "
+            "Marker 1–3 nằm trong ô mật độ cao nhất của từng hotspot, không phải ranh giới "
+            "DBSCAN. Đường xanh đứt nét, nếu có, "
             "chỉ là phạm vi lọc do người dùng vẽ."
         )
 
@@ -260,6 +267,19 @@ with st.sidebar:
             format_func=lambda day: DAY_LABELS[day],
         )
     )
+    max_matching_dates = int(
+        st.number_input(
+            "Số ngày phù hợp gần nhất",
+            min_value=1,
+            max_value=MAX_SELECTABLE_DATES,
+            value=DEFAULT_MATCHING_DATES,
+            step=1,
+            help=(
+                "App lấy các ngày mới nhất khớp với những thứ đã chọn. "
+                "Ví dụ chọn Thứ Sáu và 5 ngày nghĩa là 5 Thứ Sáu gần nhất."
+            ),
+        )
+    )
     start_time = st.time_input(
         "Bắt đầu",
         value=time(18, 0),
@@ -271,6 +291,7 @@ with st.sidebar:
         step=timedelta(minutes=15),
         help="Giờ kết thúc sớm hơn giờ bắt đầu được hiểu là cửa sổ qua đêm.",
     )
+    st.caption("Nếu dữ liệu có ít ngày phù hợp hơn, app sẽ dùng toàn bộ số ngày hiện có.")
 
     with st.expander("3. Cài đặt DBSCAN"):
         eps_m = st.slider(
@@ -313,6 +334,7 @@ if spatial_mode == "Vẽ một vùng":
                 None,
                 geometry_json,
                 weekdays,
+                max_matching_dates,
                 start_minute,
                 window_minutes,
             )
@@ -366,6 +388,7 @@ else:
                 selected_borough,
                 None,
                 weekdays,
+                max_matching_dates,
                 start_minute,
                 window_minutes,
             )
@@ -403,6 +426,7 @@ if selection is not None and weekdays:
             selection.borough,
             selection.geometry_json,
             weekdays,
+            max_matching_dates,
             start_minute,
             window_minutes,
         )
@@ -417,6 +441,12 @@ elif preview is not None:
     st.write(
         f"Truy vấn hiện tại có **{preview.total_points:,} pickup** trên "
         f"**{preview.available_matching_dates} ngày phù hợp**."
+    )
+    st.caption(
+        "Ngày được dùng: "
+        + ", ".join(
+            pd.Timestamp(date).strftime("%d/%m/%Y") for date in preview.matching_dates
+        )
     )
     if preview.total_points > MAX_ANALYSIS_POINTS:
         st.warning(
@@ -445,6 +475,7 @@ if selection is not None:
         "borough": selection.borough,
         "geometry_json": selection.geometry_json,
         "weekdays": weekdays,
+        "max_matching_dates": max_matching_dates,
         "start_minute": start_minute,
         "window_minutes": window_minutes,
         "eps_m": eps_m,
@@ -457,6 +488,9 @@ saved_query = st.session_state.get("hotspot_query")
 if saved_query is None:
     st.info("Chọn ngữ cảnh rồi bấm **Tìm vùng ưu tiên** để chạy DBSCAN.")
     st.stop()
+if "max_matching_dates" not in saved_query:
+    saved_query = {**saved_query, "max_matching_dates": DEFAULT_MATCHING_DATES}
+    st.session_state["hotspot_query"] = saved_query
 
 if saved_query != current_query:
     st.info(
@@ -478,5 +512,11 @@ st.markdown(
     f"### {analysis.spatial_selection.label} · {day_text} · "
     f"{window_label(analysis.start_minute, analysis.window_minutes)} · "
     f"eps {analysis.eps_m:.0f}m · MinPts {analysis.min_samples}"
+)
+st.caption(
+    "Ngày được phân tích: "
+    + ", ".join(
+        pd.Timestamp(date).strftime("%d/%m/%Y") for date in analysis.matching_dates
+    )
 )
 render_analysis(analysis)

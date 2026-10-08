@@ -124,6 +124,7 @@ class ContextPreview:
     points: pd.DataFrame
     total_points: int
     available_matching_dates: int
+    matching_dates: tuple[str, ...]
 
 
 def _resolve_selection(
@@ -159,6 +160,26 @@ def _weekday_indices(weekday_selection: list[str] | tuple[str, ...]) -> set[int]
     if unknown:
         raise ValueError(f"Ngay trong tuan khong hop le: {unknown}")
     return {lookup[name.casefold()] for name in weekday_selection}
+
+
+def matching_dates_for_context(
+    pickups: pd.DataFrame,
+    weekday_selection: list[str] | tuple[str, ...],
+    max_matching_dates: int | None = None,
+) -> tuple[str, ...]:
+    """Cac ngay lich gan nhat khop thu da chon trong pham vi dataset."""
+    if "pickup_datetime" not in pickups.columns:
+        raise ValueError("Du lieu thieu cot bat buoc: ['pickup_datetime']")
+    if max_matching_dates is not None and max_matching_dates < 1:
+        raise ValueError("So ngay phu hop toi da phai lon hon 0")
+
+    weekdays = _weekday_indices(weekday_selection)
+    timestamps = pd.to_datetime(pickups["pickup_datetime"])
+    calendar_dates = pd.DatetimeIndex(timestamps.dt.normalize().unique()).sort_values()
+    matching = calendar_dates[calendar_dates.dayofweek.isin(weekdays)]
+    if max_matching_dates is not None:
+        matching = matching[-max_matching_dates:]
+    return tuple(date.strftime("%Y-%m-%d") for date in matching)
 
 
 def _validate_columns(pickups: pd.DataFrame) -> None:
@@ -208,7 +229,8 @@ def _context_mask(
     weekday_selection: list[str] | tuple[str, ...],
     start_minute: int,
     window_minutes: int,
-) -> tuple[pd.Series, pd.Series, int]:
+    max_matching_dates: int | None = None,
+) -> tuple[pd.Series, pd.Series, tuple[str, ...]]:
     _validate_columns(pickups)
     weekdays = _weekday_indices(weekday_selection)
     if not 15 <= window_minutes <= 24 * 60 or window_minutes % 15:
@@ -227,12 +249,15 @@ def _context_mask(
 
     # Mau so phan anh do phu ngay cua toan dataset, khong phu thuoc viec
     # khu vuc dang chon co pickup hay khong.
-    calendar_dates = timestamps.dt.normalize().drop_duplicates()
-    available_dates = set(calendar_dates[calendar_dates.dt.dayofweek.isin(weekdays)])
-    coverage_mask = context_dates.isin(available_dates)
+    matching_dates = matching_dates_for_context(
+        pickups,
+        weekday_selection,
+        max_matching_dates=max_matching_dates,
+    )
+    coverage_mask = context_dates.isin(pd.to_datetime(matching_dates))
     temporal_mask = time_mask & weekday_mask & coverage_mask
     spatial_mask = _spatial_mask(pickups, spatial_selection, temporal_mask)
-    return temporal_mask & spatial_mask, context_dates, len(available_dates)
+    return temporal_mask & spatial_mask, context_dates, matching_dates
 
 
 def _materialize(
@@ -258,16 +283,18 @@ def preview_context(
     start_hour: int | None = None,
     window_minutes: int,
     max_preview_points: int = 1_500,
+    max_matching_dates: int | None = None,
 ) -> ContextPreview:
     """Dem chinh xac va chi lay mau co dinh cho ban do preview."""
     selection = _resolve_selection(spatial_selection, area)
     start = _resolve_start_minute(start_minute, start_hour)
-    mask, context_dates, available_dates = _context_mask(
+    mask, context_dates, matching_dates = _context_mask(
         pickups,
         spatial_selection=selection,
         weekday_selection=weekday_selection,
         start_minute=start,
         window_minutes=window_minutes,
+        max_matching_dates=max_matching_dates,
     )
     positions = np.flatnonzero(mask.to_numpy())
     total = len(positions)
@@ -278,7 +305,8 @@ def preview_context(
     return ContextPreview(
         points=_materialize(pickups, positions, context_dates),
         total_points=total,
-        available_matching_dates=available_dates,
+        available_matching_dates=len(matching_dates),
+        matching_dates=matching_dates,
     )
 
 
@@ -292,18 +320,20 @@ def filter_context(
     start_hour: int | None = None,
     window_minutes: int,
     max_points: int | None = None,
+    max_matching_dates: int | None = None,
 ) -> tuple[pd.DataFrame, int]:
     """Loc mot ngu canh lap lai ma khong sua DataFrame nguon."""
     selection = _resolve_selection(spatial_selection, area)
     start = _resolve_start_minute(start_minute, start_hour)
-    mask, context_dates, available_dates = _context_mask(
+    mask, context_dates, matching_dates = _context_mask(
         pickups,
         spatial_selection=selection,
         weekday_selection=weekday_selection,
         start_minute=start,
         window_minutes=window_minutes,
+        max_matching_dates=max_matching_dates,
     )
     positions = np.flatnonzero(mask.to_numpy())
     if max_points is not None and len(positions) > max_points:
         raise QueryTooLargeError(len(positions), max_points)
-    return _materialize(pickups, positions, context_dates), available_dates
+    return _materialize(pickups, positions, context_dates), len(matching_dates)
