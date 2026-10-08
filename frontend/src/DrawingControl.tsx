@@ -17,6 +17,26 @@ export function DrawingControl({ onChange, clearRevision, geometry }: Props) {
   const previousClearRevision = useRef(clearRevision)
 
   useEffect(() => {
+    map.pm.setLang('en', {
+      tooltips: {
+        firstVertex: 'Nhấn để bắt đầu vẽ vùng',
+        continueLine: 'Nhấn để thêm góc của vùng',
+        finishPoly: 'Nhấn vào điểm đầu để hoàn tất vùng',
+        finishRect: 'Nhấn để hoàn tất vùng',
+      },
+      actions: {
+        finish: 'Hoàn tất',
+        cancel: 'Hủy',
+        removeLastVertex: 'Xóa góc vừa thêm',
+      },
+      buttonTitles: {
+        drawPolyButton: 'Vẽ vùng nhiều cạnh',
+        drawRectButton: 'Vẽ vùng chữ nhật',
+        editButton: 'Chỉnh sửa vùng đã vẽ',
+        dragButton: 'Di chuyển vùng đã vẽ',
+        deleteButton: 'Xóa vùng đã vẽ',
+      },
+    })
     map.pm.addControls({
       drawMarker: false, drawCircleMarker: false, drawCircle: false,
       drawPolyline: false, drawText: false, cutPolygon: false,
