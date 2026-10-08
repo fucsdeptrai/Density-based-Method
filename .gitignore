@@ -6,6 +6,10 @@ __pycache__/
 .Python
 build/
 dist/
+frontend/node_modules/
+frontend/test-results/
+frontend/playwright-report/
+frontend/*.tsbuildinfo
 *.egg-info/
 .venv/
 venv/

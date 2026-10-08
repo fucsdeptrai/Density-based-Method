@@ -1,5 +1,7 @@
 # Ride Pickup Hotspot Explorer
 
+> Lưu ý: Đây là kế hoạch Streamlit ban đầu. Ứng dụng hiện tại dùng React + FastAPI; xem README để chạy.
+
 ## Revised implementation plan for the coding agent
 
 ## 1. Product thesis

@@ -18,9 +18,13 @@ scikit-learn==1.8.0
 # shapely 2.x: contains_xy vector hoa, 4.5M diem trong ~2 giay
 shapely==2.1.2
 
-# --- App Streamlit ---
-streamlit>=1.40
-streamlit-folium>=0.2.0
+# --- Web app + API ---
+fastapi>=0.142,<1
+uvicorn>=0.30
+# FastAPI TestClient
+httpx>=0.27
+
+# --- Folium for offline diagnostic scripts ---
 folium>=0.17
 branca>=0.8
 
