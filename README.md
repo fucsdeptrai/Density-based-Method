@@ -16,13 +16,14 @@ python3 -m venv .venv
 npm ci --prefix frontend
 bash scripts/download_data.sh
 .venv/bin/python -m src.preprocess --full
+bash scripts/download_offline_map.sh
 npm run build --prefix frontend
-.venv/bin/python -m uvicorn hotspot.api:app --app-dir src --host 0.0.0.0 --port 8899
+.venv/bin/python -m uvicorn hotspot.api:app --app-dir src --host 127.0.0.1 --port 8899
 ```
 
-Nếu `data/processed/full.parquet` đã có sẵn, có thể bỏ qua bước tải và xử lý dữ liệu. Sau lần build đầu, chỉ cần lệnh Uvicorn cuối cùng để chạy ứng dụng.
+Nếu `data/processed/full.parquet` đã có sẵn, có thể bỏ qua bước tải và xử lý dữ liệu chuyến đi. Lệnh tải bản đồ tạo `data/maps/nyc.pmtiles` một lần khi có Internet; file này không được đưa vào Git. Có thể sao chép file đó từ máy khác nếu mạng trên máy chạy app yếu. Sau khi đã có dữ liệu và build frontend, chỉ cần lệnh Uvicorn cuối cùng để chạy ứng dụng.
 
-Mở `http://localhost:8899` trên máy chạy app. Máy khác cùng LAN/Wi-Fi mở `http://<IP-máy-chạy-app>:8899`; máy đó chỉ cần trình duyệt, không cần cài Python hay Node.js. Nếu không truy cập được, kiểm tra firewall của máy chủ và bảo đảm hai máy không ở mạng Wi-Fi khách bị cách ly. Không mở cổng này ra Internet công khai. Nền đường phố OpenStreetMap cần Internet; dữ liệu pickup và DBSCAN vẫn chạy trên máy chủ qua LAN.
+Mở `http://localhost:8899` trên chính máy chạy app. Sau bước chuẩn bị, nền đường phố, dữ liệu chuyến đi và phân tích đều hoạt động khi ngắt Internet. Nền bản đồ dùng [Protomaps](https://docs.protomaps.com/basemaps/downloads) từ dữ liệu OpenStreetMap và giữ ghi công OpenStreetMap trên giao diện. Nếu thiếu file bản đồ, ứng dụng sẽ báo trên trang; các thao tác phân tích vẫn dùng được.
 
 Khi phát triển giao diện, chạy Uvicorn ở cổng 8899 và `npm run dev --prefix frontend`; Vite chuyển tiếp `/api` đến FastAPI.
 

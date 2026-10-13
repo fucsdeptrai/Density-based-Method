@@ -148,6 +148,25 @@ def test_built_frontend_and_api_share_one_origin(tmp_path):
     assert "/api/analyze" in api.json()["paths"]
 
 
+def test_offline_map_supports_range_requests(tmp_path):
+    archive = b"PMTiles" + bytes(range(256))
+    (tmp_path / "nyc.pmtiles").write_bytes(archive)
+
+    with TestClient(create_app(map_dir=tmp_path, serve_frontend=False)) as app_client:
+        response = app_client.get("/maps/nyc.pmtiles", headers={"Range": "bytes=0-126"})
+
+    assert response.status_code == 206
+    assert response.headers["content-range"] == f"bytes 0-126/{len(archive)}"
+    assert response.content == archive[:127]
+
+
+def test_missing_offline_map_returns_404(tmp_path):
+    with TestClient(create_app(map_dir=tmp_path, serve_frontend=False)) as app_client:
+        response = app_client.get("/maps/nyc.pmtiles")
+
+    assert response.status_code == 404
+
+
 def test_missing_dataset_returns_setup_instruction(tmp_path):
     with TestClient(create_app(data_dir=tmp_path, serve_frontend=False)) as app_client:
         response = app_client.get("/api/bootstrap")

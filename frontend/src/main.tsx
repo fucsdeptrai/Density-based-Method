@@ -2,10 +2,11 @@ import { StrictMode, useCallback, useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import L from 'leaflet'
 import type { GeoJsonObject } from 'geojson'
-import { CircleMarker, GeoJSON, MapContainer, Marker, TileLayer, ZoomControl } from 'react-leaflet'
+import { CircleMarker, GeoJSON, MapContainer, Marker, ZoomControl } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { DrawingControl } from './DrawingControl'
 import { MapFocus } from './MapFocus'
+import { OfflineMapLayer } from './OfflineMapLayer'
 import './style.css'
 
 type Point = [number, number]
@@ -92,6 +93,7 @@ function App() {
   const [topK, setTopK] = useState(3)
   const [analyzing, setAnalyzing] = useState(false)
   const [error, setError] = useState('')
+  const [offlineMapAvailable, setOfflineMapAvailable] = useState<boolean | null>(null)
   const onDrawChange = useCallback((nextGeometry: object | null) => setGeometry(nextGeometry), [])
   const minute = (value: string) => {
     const [hour, part] = value.split(':').map(Number)
@@ -109,6 +111,12 @@ function App() {
   const currentAnalysisKey = JSON.stringify(analysisQuery)
   const analyzedQuery = useMemo(() => analysisKey ? JSON.parse(analysisKey) as StoredQuery : null, [analysisKey])
   const analyzedSelection = analyzedQuery?.selection
+
+  useEffect(() => {
+    fetch('/maps/nyc.pmtiles', { headers: { Range: 'bytes=0-126' } })
+      .then(response => setOfflineMapAvailable(response.status === 206))
+      .catch(() => setOfflineMapAvailable(false))
+  }, [])
 
   useEffect(() => {
     fetch('/api/bootstrap')
@@ -212,6 +220,7 @@ function App() {
       <article className="workspace">
       {error && <p role="alert" className="notice error">{error}</p>}
       <h2>Bản đồ các điểm đón khách</h2>
+      {offlineMapAvailable === false && <p role="status" className="notice warning">Chưa có nền bản đồ trên máy. Hãy chuẩn bị gói bản đồ offline rồi tải lại trang.</p>}
       {!bootstrap && !error && <p role="status">Đang tải dữ liệu chuyến đi…</p>}
       {bootstrap && !preview && !error && weekdays.length > 0 && maxDates >= 1 && maxDates <= 30 && (spatialMode === 'borough' ? borough : geometry) && <p role="status">Đang tải các điểm đón…</p>}
       {preview && <>
@@ -222,7 +231,7 @@ function App() {
       <section aria-label="Bản đồ các điểm đón khách" className="map-panel">
         <MapContainer center={[40.6782, -73.9442]} zoom={12} zoomControl={false} scrollWheelZoom className="map">
           <ZoomControl zoomInTitle="Phóng to" zoomOutTitle="Thu nhỏ" />
-          <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          {offlineMapAvailable && <OfflineMapLayer />}
           <MapFocus borough={spatialMode === 'borough' ? borough : undefined} geometry={spatialMode === 'draw' ? geometry : null} />
           {spatialMode === 'draw' && <DrawingControl onChange={onDrawChange} clearRevision={clearRevision} geometry={geometry} />}
           {(preview?.points ?? bootstrap?.points ?? []).map(([lat, lon], index) =>
@@ -253,7 +262,7 @@ function App() {
       <section aria-label="Bản đồ kết quả" className="map-panel result-map-panel">
         <MapContainer center={[40.6782, -73.9442]} zoom={12} zoomControl={false} scrollWheelZoom className="map result-map">
           <ZoomControl zoomInTitle="Phóng to" zoomOutTitle="Thu nhỏ" />
-          <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          {offlineMapAvailable && <OfflineMapLayer />}
           <MapFocus borough={analyzedSelection?.borough} geometry={analyzedSelection?.geometry} />
           {analyzedSelection?.geometry && <GeoJSON data={analyzedSelection.geometry as GeoJsonObject} style={{ color: '#2563eb', weight: 3, fillOpacity: 0.08, dashArray: '7,5' }} />}
           {analysis.map.raw.map(([lat, lon], index) =>

@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/maps/nyc.pmtiles', route => route.fulfill({ status: 404 }))
+})
+
 test('user sees the default context and its pickup preview', async ({ page }) => {
   await page.route('**/api/bootstrap', route => route.fulfill({ json: {
     areas: ['Brooklyn', 'Manhattan'],
@@ -15,6 +19,7 @@ test('user sees the default context and its pickup preview', async ({ page }) =>
   await page.goto('/')
 
   await expect(page.getByRole('heading', { name: 'Khám phá khu vực đón khách' })).toBeVisible()
+  await expect(page.getByText('Chưa có nền bản đồ trên máy.', { exact: false })).toBeVisible()
   await expect(page.getByLabel('Khu vực hành chính', { exact: true })).toHaveValue('Brooklyn')
   await expect(page.getByText('12 lượt đón', { exact: false })).toBeVisible()
 })
@@ -113,8 +118,6 @@ test('preview places pickup samples on an interactive map', async ({ page }) => 
     total_points: 1, available_matching_dates: 1,
     matching_dates: ['2024-01-05'], points: [[40.68, -73.94]],
   } }))
-  await page.route('https://*.tile.openstreetmap.org/**', route => route.abort())
-
   await page.goto('/')
 
   const map = page.getByRole('region', { name: 'Bản đồ các điểm đón khách' })
@@ -133,8 +136,6 @@ test('drawing a rectangle previews the selected region', async ({ page }) => {
       available_matching_dates: 1, matching_dates: ['2024-01-05'], points: [],
     } })
   })
-  await page.route('https://*.tile.openstreetmap.org/**', route => route.abort())
-
   await page.goto('/')
   await page.getByRole('radio', { name: 'Chọn khu vực trên bản đồ' }).check()
   await expect(page.getByTitle('Vẽ vùng chữ nhật')).toBeVisible()
@@ -304,8 +305,6 @@ test('map moves to the selected area', async ({ page }) => {
       points: [query.selection.borough === 'EWR' ? [40.6895, -74.1745] : [40.6782, -73.9442]],
     } })
   })
-  await page.route('https://*.tile.openstreetmap.org/**', route => route.abort())
-
   await page.goto('/')
   await page.getByLabel('Khu vực hành chính', { exact: true }).selectOption('EWR')
 

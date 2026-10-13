@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Lock
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .data import load_dataset
@@ -52,12 +53,20 @@ def sampled_points(frame, limit: int, seed: int) -> list[list[float]]:
 def create_app(
     *,
     data_dir: Path | None = None,
+    map_dir: Path | None = None,
     serve_frontend: bool = True,
     frontend_dir: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Historical pickup hotspots")
     load_lock = Lock()
     analysis_lock = Lock()
+    offline_map = (map_dir or Path(__file__).resolve().parents[2] / "data" / "maps") / "nyc.pmtiles"
+
+    @app.get("/maps/nyc.pmtiles")
+    def map_archive():
+        if not offline_map.is_file():
+            raise HTTPException(status_code=404, detail="Offline map is not installed")
+        return FileResponse(offline_map, media_type="application/octet-stream")
 
     @lru_cache(maxsize=1)
     def load_pickups():
