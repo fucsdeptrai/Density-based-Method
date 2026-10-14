@@ -14,6 +14,7 @@ const AREA_VIEWS: Record<string, { center: [number, number]; zoom: number }> = {
 export function MapFocus({ borough, geometry }: { borough?: string; geometry?: object | null }) {
   const map = useMap()
   useEffect(() => {
+    map.invalidateSize()
     if (geometry) {
       map.fitBounds(L.geoJSON(geometry as Parameters<typeof L.geoJSON>[0]).getBounds(), { padding: [20, 20] })
     } else {

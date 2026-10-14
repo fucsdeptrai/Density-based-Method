@@ -43,11 +43,17 @@ test('user analyzes the context and sees ranked historical zones', async ({ page
   } }))
 
   await page.goto('/')
-  await page.getByRole('button', { name: 'Tìm khu vực có nhiều lượt đón' }).click()
+  await page.getByRole('button', { name: 'Phân tích điểm nóng' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Khu vực đón khách nổi bật' })).toBeVisible()
-  await expect(page.getByText('Khu vực 1: 9 lượt đón', { exact: false })).toBeVisible()
-  await expect(page.getByText('25,0% lượt đón', { exact: false })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Top 1 khu vực nổi bật' })).toBeVisible()
+  await expect(page.locator('.result-stats')).toContainText('12')
+  await expect(page.locator('.result-stats')).toContainText('1')
+  await expect(page.getByLabel('Bộ lọc của kết quả')).toContainText('Thứ Sáu')
+  await expect(page.locator('.map-legend')).toContainText('Điểm nóng và thứ hạng')
+  await expect(page.getByRole('checkbox', { name: 'Hiện điểm dữ liệu' })).not.toBeChecked()
+  await expect(page.getByRole('button', { name: /Khu vực 1.*9 lượt đón/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Khu vực 1.*9 lượt đón/ })).toContainText('75% tổng lượt đón')
+  await expect(page.locator('.result-footnote')).toContainText('25% lượt đón chưa thuộc khu vực nào')
 })
 
 test('user can change Top K after analysis without the API', async ({ page }) => {
@@ -59,10 +65,10 @@ test('user can change Top K after analysis without the API', async ({ page }) =>
     matching_dates: ['2024-01-05'], points: [],
   } }))
   await page.route('**/api/analyze', route => route.fulfill({ json: {
-    n_points: 12, n_clusters: 4, noise_percentage: 0,
+    n_points: 12, n_clusters: 106, noise_percentage: 0,
     largest_cluster_percentage: 25,
     matching_dates: ['2024-01-05'], available_matching_dates: 1,
-    zones: [1, 2, 3, 4].map(rank => ({ rank, cluster_id: rank - 1,
+    zones: Array.from({ length: 10 }, (_, index) => index + 1).map(rank => ({ rank, cluster_id: rank * 7,
       pickup_count: 3, support_dates: 1, available_matching_dates: 1,
       pickups_per_matching_date: 3, marker_latitude: 40.68 + rank * 0.01,
       marker_longitude: -73.94 })),
@@ -70,17 +76,40 @@ test('user can change Top K after analysis without the API', async ({ page }) =>
   } }))
 
   await page.goto('/')
-  await page.getByRole('button', { name: 'Tìm khu vực có nhiều lượt đón' }).click()
-  await expect(page.getByText('Đang hiển thị 3 khu vực')).toBeVisible()
-  await expect(page.getByText('Khu vực 4:', { exact: false })).toHaveCount(0)
-  await expect(page.locator('.hotspot-marker')).toHaveCount(3)
+  await page.getByRole('button', { name: 'Phân tích điểm nóng' }).click()
+  await expect(page.locator('.result-stats > div').nth(1)).toContainText('106')
+  await expect(page.locator('.result-stats > div').nth(1)).toContainText('khu vực ứng viên')
+  await expect(page.getByRole('heading', { name: 'Top 10 khu vực nổi bật' })).toBeVisible()
+  await expect(page.locator('.result-footnote')).toContainText('Hiển thị 10/106 khu vực ứng viên')
+  await expect(page.locator('.hotspot-marker')).toHaveCount(10)
+  const listBox = await page.locator('.zone-list').boundingBox()
+  const footnoteBox = await page.locator('.result-footnote').boundingBox()
+  expect(listBox && footnoteBox && listBox.y < footnoteBox.y).toBeTruthy()
+  await page.getByRole('region', { name: 'Bản đồ kết quả' }).scrollIntoViewIfNeeded()
+  for (const marker of await page.locator('.hotspot-marker').all()) {
+    await expect(marker).toBeInViewport()
+  }
 
   await page.route('**/api/**', route => route.abort())
-  await page.getByLabel('Số khu vực hiển thị').selectOption('4')
+  await page.getByLabel('Số khu vực tối đa hiển thị').selectOption('3')
+  await expect(page.locator('.result-footnote')).toContainText('Hiển thị 3/106 khu vực ứng viên')
+  await expect(page.getByRole('button', { name: /Khu vực 4/ })).toHaveCount(0)
+  await expect(page.locator('.hotspot-marker')).toHaveCount(3)
+  await page.getByLabel('Số khu vực tối đa hiển thị').selectOption('4')
 
-  await expect(page.getByText('Đang hiển thị 4 khu vực')).toBeVisible()
-  await expect(page.getByText('Khu vực 4:', { exact: false })).toBeVisible()
+  await expect(page.locator('.result-footnote')).toContainText('Hiển thị 4/106 khu vực ứng viên')
+  await expect(page.getByRole('button', { name: /Khu vực 4/ })).toBeVisible()
   await expect(page.locator('.hotspot-marker')).toHaveCount(4)
+
+  await page.getByRole('button', { name: /Khu vực 4/ }).click()
+  await expect(page.getByRole('button', { name: /Khu vực 4/ })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.hotspot-marker.selected')).toHaveCount(1)
+  await page.getByLabel('Số khu vực tối đa hiển thị').selectOption('3')
+  await expect(page.locator('.hotspot-marker.selected')).toHaveCount(0)
+  await page.locator('.hotspot-marker[title="Khu vực 1"]').click()
+  await expect(page.getByRole('button', { name: /Khu vực 1/ })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Xem tất cả' }).click()
+  await expect(page.locator('.hotspot-marker.selected')).toHaveCount(0)
 })
 
 test('changing the time updates preview and marks the previous analysis as old', async ({ page }) => {
@@ -102,12 +131,16 @@ test('changing the time updates preview and marks the previous analysis as old',
   } }))
 
   await page.goto('/')
-  await page.getByRole('button', { name: 'Tìm khu vực có nhiều lượt đón' }).click()
+  await page.getByRole('button', { name: 'Phân tích điểm nóng' }).click()
+  await expect(page.getByText('Có 12 lượt đón nhưng chưa tìm thấy điểm nóng đủ tập trung.', { exact: false })).toBeVisible()
+  await expect(page.locator('.map-empty')).toBeVisible()
+  await expect(page.locator('.result-footnote')).toContainText('Hiển thị 0/0 khu vực ứng viên')
   await page.getByLabel('Giờ bắt đầu').fill('19:00')
 
   await expect(page.getByText('7 lượt đón', { exact: false })).toBeVisible()
-  await expect(page.getByText('Bạn đã thay đổi bộ lọc. Nhấn nút tìm kiếm để cập nhật kết quả.')).toBeVisible()
-  await expect(page.getByText('Brooklyn · Thứ Sáu · 18:00–19:00')).toBeVisible()
+  await expect(page.getByText('Bạn đã thay đổi bộ lọc. Nhấn Phân tích điểm nóng để cập nhật kết quả.')).toBeVisible()
+  await expect(page.getByLabel('Bộ lọc của kết quả')).toContainText('Brooklyn')
+  await expect(page.getByLabel('Bộ lọc của kết quả')).toContainText('18:00–19:00')
 })
 
 test('preview places pickup samples on an interactive map', async ({ page }) => {
@@ -136,6 +169,12 @@ test('drawing a rectangle previews the selected region', async ({ page }) => {
       available_matching_dates: 1, matching_dates: ['2024-01-05'], points: [],
     } })
   })
+  await page.route('**/api/analyze', route => route.fulfill({ json: {
+    n_points: 7, n_clusters: 0, noise_percentage: 100,
+    largest_cluster_percentage: 0, matching_dates: ['2024-01-05'],
+    available_matching_dates: 1, zones: [],
+    map: { raw: [], noise: [], other: [], ranked: [] },
+  } }))
   await page.goto('/')
   await page.getByRole('radio', { name: 'Chọn khu vực trên bản đồ' }).check()
   await expect(page.getByTitle('Vẽ vùng chữ nhật')).toBeVisible()
@@ -154,8 +193,13 @@ test('drawing a rectangle previews the selected region', async ({ page }) => {
   await page.getByRole('radio', { name: 'Chọn khu vực trên bản đồ' }).check()
   await expect(page.getByText('7 lượt đón', { exact: false })).toBeVisible()
   await expect(page.locator('.leaflet-container path.leaflet-interactive')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Phân tích điểm nóng' }).click()
+  await expect(page.getByRole('region', { name: 'Bản đồ kết quả' })).toBeVisible()
+  await expect(page.locator('.leaflet-container')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Hiện điểm dữ liệu' }).click()
+  await expect(page.locator('.leaflet-container path.leaflet-interactive')).toHaveCount(1)
   await page.getByRole('button', { name: 'Xóa khu vực đã chọn' }).click()
-  await expect(page.getByRole('button', { name: 'Tìm khu vực có nhiều lượt đón' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Phân tích điểm nóng' })).toBeDisabled()
   await expect(page.locator('.leaflet-container path.leaflet-interactive')).toHaveCount(0)
 })
 
@@ -219,9 +263,10 @@ test('user can set DBSCAN distance and minimum support before analysis', async (
   await page.getByText('Tùy chọn phân tích nâng cao').click()
   await page.getByLabel('Bán kính gom điểm (m)').fill('100')
   await page.getByLabel('Số điểm đón tối thiểu trong bán kính').fill('10')
-  await page.getByRole('button', { name: 'Tìm khu vực có nhiều lượt đón' }).click()
+  await page.getByRole('button', { name: 'Phân tích điểm nóng' }).click()
 
-  await expect(page.getByText('Số khu vực tìm thấy: 2')).toBeVisible()
+  await expect(page.locator('.result-stats')).toContainText('2')
+  await expect(page.locator('.result-stats')).toContainText('khu vực ứng viên')
 })
 
 test('large preview asks the user to narrow the query', async ({ page }) => {
@@ -236,7 +281,7 @@ test('large preview asks the user to narrow the query', async ({ page }) => {
   await page.goto('/')
 
   await expect(page.getByText('Có quá nhiều lượt đón để tìm khu vực. Hãy thu hẹp khu vực, ngày hoặc khung giờ.')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Tìm khu vực có nhiều lượt đón' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Phân tích điểm nóng' })).toBeDisabled()
 })
 
 test('analysis error is explained to the user', async ({ page }) => {
@@ -252,7 +297,7 @@ test('analysis error is explained to the user', async ({ page }) => {
   } }))
 
   await page.goto('/')
-  await page.getByRole('button', { name: 'Tìm khu vực có nhiều lượt đón' }).click()
+  await page.getByRole('button', { name: 'Phân tích điểm nóng' }).click()
 
   await expect(page.getByRole('alert')).toContainText('Không thể xử lý bộ lọc. Hãy kiểm tra khu vực, ngày và giờ rồi thử lại.')
 })
@@ -265,7 +310,7 @@ test('network error is explained in Vietnamese', async ({ page }) => {
   await expect(page.getByRole('alert')).toContainText('Không kết nối được với máy chủ. Hãy kiểm tra mạng và thử lại.')
 })
 
-test('new preview and previous analysis keep separate maps', async ({ page }) => {
+test('new preview remains available after analysis without two large maps', async ({ page }) => {
   await page.route('**/api/bootstrap', route => route.fulfill({ json: {
     areas: ['Brooklyn'], points: [],
   } }))
@@ -285,12 +330,21 @@ test('new preview and previous analysis keep separate maps', async ({ page }) =>
   } }))
 
   await page.goto('/')
-  await page.getByRole('button', { name: 'Tìm khu vực có nhiều lượt đón' }).click()
+  await page.getByRole('button', { name: 'Phân tích điểm nóng' }).click()
   await page.getByLabel('Giờ bắt đầu').fill('19:00')
 
   await expect(page.getByText('7 lượt đón', { exact: false })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Bản đồ các điểm đón khách' })).toHaveCount(0)
+  await expect(page.locator('.leaflet-container')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Hiện điểm dữ liệu' }).click()
   await expect(page.getByRole('region', { name: 'Bản đồ các điểm đón khách' }).locator('path.leaflet-interactive')).toHaveCount(1)
+  await expect(page.getByRole('region', { name: 'Bản đồ kết quả' })).toHaveCount(0)
+  await expect(page.locator('.leaflet-container')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Kết quả phân tích' }).click()
+  await expect(page.getByRole('region', { name: 'Bản đồ kết quả' }).locator('path.leaflet-interactive')).toHaveCount(0)
+  await page.getByRole('checkbox', { name: 'Hiện điểm dữ liệu' }).check()
   await expect(page.getByRole('region', { name: 'Bản đồ kết quả' }).locator('path.leaflet-interactive')).toHaveCount(1)
+  await expect(page.locator('.leaflet-container')).toHaveCount(1)
 })
 
 test('map moves to the selected area', async ({ page }) => {
@@ -311,4 +365,21 @@ test('map moves to the selected area', async ({ page }) => {
   const map = page.getByRole('region', { name: 'Bản đồ các điểm đón khách' })
   await map.scrollIntoViewIfNeeded()
   await expect(map.locator('path.leaflet-interactive')).toBeInViewport()
+})
+
+test('filters can be expanded on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route('**/api/bootstrap', route => route.fulfill({ json: {
+    areas: ['Brooklyn'], points: [],
+  } }))
+  await page.route('**/api/preview', route => route.fulfill({ json: {
+    total_points: 12, available_matching_dates: 1,
+    matching_dates: ['2024-01-05'], points: [],
+  } }))
+
+  await page.goto('/')
+  await expect(page.getByLabel('Khu vực hành chính', { exact: true })).toBeHidden()
+  await page.getByRole('button', { name: 'Mở bộ lọc' }).click()
+  await expect(page.getByLabel('Khu vực hành chính', { exact: true })).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Bản đồ các điểm đón khách' }).locator('.leaflet-container')).toBeVisible()
 })

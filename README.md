@@ -100,4 +100,4 @@ Sinh screenshot fallback bằng:
 - DBSCAN không tạo polygon hay ranh giới bám đường phố. Marker là một pickup trong ô `eps` dày nhất, không phải một điểm chờ chính xác.
 - Kết quả nhạy với `eps`, `MinPts`, phạm vi và mật độ dữ liệu; app cảnh báo nếu một cụm chứa hơn 50% pickup.
 
-Các notebook, hình và script thử nghiệm cũ chỉ là chẩn đoán offline, không thuộc workflow chính của ứng dụng.
+Các notebook, hình và script thử nghiệm cũ chỉ là chẩn đoán offline, không thuộc workflow chính của ứng dụng. Xem [notebook so sánh K-Means và DBSCAN](notebooks/05_so_sanh_kmeans_dbscan.ipynb) để chạy hai thuật toán trên cùng lượt đón đã lọc.
